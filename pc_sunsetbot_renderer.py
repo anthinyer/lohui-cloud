@@ -1197,14 +1197,40 @@ def extract_337_cities_compact_ranking(prob_grid, lats, lons):
     return ",".join(pairs)
 
 
-def compute_grid_hourly_diff_summary(new_grid, old_b64_token, land_mask):
-    """对比本轮新网格与上一期网格，生成【较上期变化】实况演变简报 (落地新增功能 1)"""
+def _max_city_score_from_c337(c337_str):
+    if not c337_str or ":" not in str(c337_str):
+        return None
+    best = 0
+    for item in str(c337_str).split(","):
+        if ":" in item:
+            try:
+                sc = int(round(float(item.split(":")[1])))
+                if sc > best:
+                    best = sc
+            except Exception:
+                pass
+    return best if best > 0 else None
+
+
+def _prob_to_quality_score(p_val):
+    if p_val >= 48.0:
+        return int(round(max(42.0, min(96.0, 42.0 + (p_val - 48.0) / 1.05))))
+    return int(round(max(0.0, p_val / 0.92)))
+
+
+def compute_grid_hourly_diff_summary(new_grid, old_b64_token, land_mask, new_c337_str="", old_c337_str=""):
+    """对比本轮新网格与上一期网格，生成【较上期变化】实况演变简报 (峰值严格对齐全国 337 城榜首质量分)"""
     try:
+        new_max = _max_city_score_from_c337(new_c337_str)
+        if new_max is None:
+            raw_p_max = float(np.max(new_grid[land_mask])) if int(np.sum(land_mask)) > 0 else 0.0
+            new_max = _prob_to_quality_score(raw_p_max)
+
         if not old_b64_token or "|" not in old_b64_token:
-            return "首轮全量四源高精光路场已就绪"
+            return f"较上期：全量四源高精场已同步 · 峰值 {new_max}分"
         parts = old_b64_token.strip().split("|")
         if len(parts) < 5:
-            return "全量四源高精光路场已同步更新"
+            return f"较上期：全量四源高精场已更新 · 峰值 {new_max}分"
         r_str, c_str = parts[3].split("x")
         o_rows, o_cols = int(r_str), int(c_str)
         raw_b = base64.b64decode(parts[4])
@@ -1213,15 +1239,19 @@ def compute_grid_hourly_diff_summary(new_grid, old_b64_token, land_mask):
         elif len(raw_b) >= o_rows * o_cols:
             old_arr = np.frombuffer(raw_b[:o_rows * o_cols], dtype=np.uint8).astype(np.float32)
         else:
-            return "全量四源高精光路场已同步更新"
+            return f"较上期：全量四源高精场已更新 · 峰值 {new_max}分"
         old_grid = old_arr.reshape(o_rows, o_cols)
         if old_grid.shape != new_grid.shape:
-            return "网格分辨率已升级至 144×248 超清场"
+            return f"较上期：超清光路场已就绪 · 峰值 {new_max}分"
         land_cnt = max(1, int(np.sum(land_mask)))
         old_high = int(np.sum((old_grid >= 50.0) & land_mask))
         new_high = int(np.sum((new_grid >= 50.0) & land_mask))
-        old_max = int(round(float(np.max(old_grid[land_mask])))) if land_cnt > 0 else 0
-        new_max = int(round(float(np.max(new_grid[land_mask])))) if land_cnt > 0 else 0
+
+        old_max = _max_city_score_from_c337(old_c337_str)
+        if old_max is None:
+            old_p_max = float(np.max(old_grid[land_mask])) if land_cnt > 0 else 0.0
+            old_max = _prob_to_quality_score(old_p_max)
+
         delta_pct = round(((new_high - old_high) / max(1, land_cnt)) * 100.0, 1)
         delta_max = new_max - old_max
         if abs(delta_pct) < 0.4 and abs(delta_max) <= 1:
@@ -1230,7 +1260,7 @@ def compute_grid_hourly_diff_summary(new_grid, old_b64_token, land_mask):
         pk_txt = f"峰值升至 {new_max}分 (+{delta_max})" if delta_max > 0 else (f"峰值回调至 {new_max}分 ({delta_max})" if delta_max < 0 else f"峰值维持 {new_max}分")
         return f"较上期：{dir_txt} · {pk_txt}"
     except Exception:
-        return "全量四源高精光路场已实时刷新"
+        return "较上期：全量四源高精光路场已实时刷新"
 
 def upload_grid_to_gitee(compact_payload, date_str, ev_type, grids_dict=None, cities_337_dict=None, diff_summaries=None):
     """将高精网格(含今明双日朝霞+晚霞全套4张网格)自动强制覆盖上传至 Gitee 公开仓库，确保与小程序 100% 同步"""
@@ -2061,8 +2091,9 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
             b64_s = base64.b64encode(u16_bytes).decode("ascii")
             payload_str = f"LOHUI_GRID_V1|{d_str}|{ev_type}|{rows}x{cols}|{b64_s}"
 
-            diff_summaries[slot_key] = compute_grid_hourly_diff_summary(p_grid, prev_grids.get(slot_key), land_mask)
-            cities_337_dict[slot_key] = extract_337_cities_compact_ranking(p_grid, lats, lons)
+            c337_cur = extract_337_cities_compact_ranking(p_grid, lats, lons)
+            cities_337_dict[slot_key] = c337_cur
+            diff_summaries[slot_key] = compute_grid_hourly_diff_summary(p_grid, prev_grids.get(slot_key), land_mask, c337_cur, prev_cities_337.get(slot_key, ''))
             grids_dict[slot_key] = payload_str
 
             draw_vividness_figure_to_png(p_grid, d_str, sun_flag, img_p, geojson_data)
@@ -2109,7 +2140,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
     slot_key = f"{target_date_str}_{ev_type}"
     compact_payload = f"LOHUI_GRID_V1|{target_date_str}|{ev_type}|{rows}x{cols}|{b64_str}"
     c337_str = extract_337_cities_compact_ranking(prob_grid, lats, lons)
-    diff_str = compute_grid_hourly_diff_summary(prob_grid, prev_grids.get(slot_key), land_mask)
+    diff_str = compute_grid_hourly_diff_summary(prob_grid, prev_grids.get(slot_key), land_mask, c337_str, prev_cities_337.get(slot_key, ''))
 
     day_dir = os.path.join(work_dir, target_date_str)
     os.makedirs(day_dir, exist_ok=True)
