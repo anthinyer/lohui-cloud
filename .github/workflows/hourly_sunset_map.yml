@@ -13,20 +13,24 @@ env:
 
 jobs:
   render-and-sync:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: 1. 检出仓库代码
         uses: actions/checkout@v4
 
-      - name: 2. 安装科学计算依赖与中文字体 (免 requirements.txt 直接极速安装)
+      - name: 2. 启用独立 Python 3.11 环境 (已移除 cache:pip，无需 requirements.txt)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 3. 安装科学计算依赖与中文字体支持
         run: |
           sudo apt-get update -y || true
           sudo apt-get install -y fonts-noto-cjk || true
-          python3 -m pip install --upgrade pip
-          python3 -m pip install numpy scipy matplotlib
+          pip install numpy scipy matplotlib
 
-      - name: 3. 执行控制点四源采集 + 500km 连续光路追踪 + Gitee 云端同步
+      - name: 4. 执行控制点四源采集 + 500km 连续光路追踪 + Gitee 云端同步
         env:
           TZ: Asia/Shanghai
           GITEE_OWNER: ${{ secrets.GITEE_OWNER || 'anthinyer' }}
@@ -36,7 +40,7 @@ jobs:
           TODAY_BJ=$(TZ=Asia/Shanghai date +%Y-%m-%d)
           python3 pc_sunsetbot_renderer.py --date "$TODAY_BJ" --event all --cli
 
-      - name: 4. 自动保活机制 (防止 GitHub 连续 60 天无提交自动休眠定时任务)
+      - name: 5. 自动保活机制 (防止 GitHub 连续 60 天无提交自动休眠定时任务)
         run: |
           NOW_BJ=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
           echo "Last Cloud Sync (UTC+8): $NOW_BJ" > .last_cloud_sync_heartbeat.txt
