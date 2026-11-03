@@ -2,35 +2,31 @@ name: LOHUI Hourly Cloud Vividness Map & 337-City Sync
 
 on:
   schedule:
-    # 每小时整点自动运行一次 (UTC 0~23点 = 北京时间 08:00~次日07:00 全天候每小时更新)
-    # GitHub Actions 公开仓库享受永久免费无限时长 (Unlimited Free Minutes)，非限时试用
     - cron: '0 * * * *'
-  workflow_dispatch: # 支持在 GitHub Actions 页面随时手动点击 Run workflow 立即触发
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   render-and-sync:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: 1. 检出仓库代码
         uses: actions/checkout@v4
 
-      - name: 2. 配置 Python 3.11 科学计算环境
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: 3. 安装 NumPy / SciPy / Matplotlib 及中文字体支持
+      - name: 2. 安装科学计算依赖与中文字体 (免 requirements.txt 直接极速安装)
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y fonts-noto-cjk
-          pip install numpy scipy matplotlib
+          sudo apt-get update -y || true
+          sudo apt-get install -y fonts-noto-cjk || true
+          python3 -m pip install --upgrade pip
+          python3 -m pip install numpy scipy matplotlib
 
-      - name: 4. 执行 1,247 控制点四源采集 + 500km 连续光路追踪 + Gitee 云端同步
+      - name: 3. 执行控制点四源采集 + 500km 连续光路追踪 + Gitee 云端同步
         env:
           TZ: Asia/Shanghai
           GITEE_OWNER: ${{ secrets.GITEE_OWNER || 'anthinyer' }}
@@ -40,7 +36,7 @@ jobs:
           TODAY_BJ=$(TZ=Asia/Shanghai date +%Y-%m-%d)
           python3 pc_sunsetbot_renderer.py --date "$TODAY_BJ" --event all --cli
 
-      - name: 5. 自动保活机制 (防止 GitHub 连续 60 天无提交自动休眠 Cron)
+      - name: 4. 自动保活机制 (防止 GitHub 连续 60 天无提交自动休眠定时任务)
         run: |
           NOW_BJ=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
           echo "Last Cloud Sync (UTC+8): $NOW_BJ" > .last_cloud_sync_heartbeat.txt
