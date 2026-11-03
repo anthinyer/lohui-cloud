@@ -813,8 +813,8 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
     print(f"  -> [2/2 光路追踪] 正在基于 {len(records)} 个加密控制点构建 {rows}x{cols} (0.25°高精) 二阶 Barnes 物理云场...")
     # 二阶 Barnes 多重尺度客观分析 (Pass 1 宏观测站场 sigma1=0.52° + Pass 2 微观残差订正场 sigma2=0.26°):
     # 在保留大尺度云系连续性的同时，精确还原 25km 级局地云洞、山脉背风波与城市群微气候梯度！
-    sigma1_sq2 = 2.0 * (0.52 ** 2)
-    sigma2_sq2 = 2.0 * (0.26 ** 2)
+    sigma1_sq2 = 2.0 * (0.36 ** 2)
+    sigma2_sq2 = 2.0 * (0.16 ** 2)
 
     # 先计算控制点自身的 Pass 1 估计值以提取高频残差
     n_pts = len(records)
@@ -883,7 +883,7 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
 
     prob_grid = np.zeros((rows, cols), dtype=np.float32)
     # 升级为 500km 连续射线步进光路积分 (Ray-Marching: 每隔 25km 一步，共 20 个连续光路采样断面，覆盖 25km ~ 500km 完整天际线!)
-    ray_dists_km = [float(d) for d in range(25, 501, 25)]
+    ray_dists_km = [float(d) for d in range(15, 501, 20)]
     raw_exp_w = [math.exp(-d / 185.0) for d in ray_dists_km]
     w_sum_norm = sum(raw_exp_w)
     ray_weights = [w / w_sum_norm for w in raw_exp_w]
@@ -2029,7 +2029,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
             pass
 
     # 升级至 144 x 248 超清网格 (0.25° 经纬度步长，对标 ECMWF 原生 25km 分辨率)
-    rows, cols = 144, 248
+    rows, cols = 240, 414
     lats = np.linspace(18.0, 54.0, rows)
     lons = np.linspace(73.0, 135.0, cols)
     geojson_data = load_china_provinces_geojson(work_dir)
