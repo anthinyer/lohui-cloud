@@ -2,7 +2,8 @@ name: LOHUI Hourly Cloud Vividness Map & 337-City Sync
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    # 每小时整点自动运行一次 (UTC 0~23点 = 北京时间 08:00~次日07:00 全天候每小时更新)
+    - cron: '2 * * * *'
   workflow_dispatch:
 
 permissions:
