@@ -2107,7 +2107,8 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
         primary_payload = grids_dict.get(primary_key) or grids_dict.get(f"{target_date_str}_sunset") or list(grids_dict.values())[0]
         with open(out_json_path, "w", encoding="utf-8") as f:
             json.dump({
-                "updatedAt": datetime.datetime.now().isoformat(),
+                "updatedAt": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(),
+                "updatedAtMs": int(time.time() * 1000),
                 "dateStr": target_date_str,
                 "eventType": "sunset",
                 "gridPrecision": "0.1_LOSSLESS_UINT16",
@@ -2153,7 +2154,8 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
 
     with open(out_json_path, "w", encoding="utf-8") as f:
         json.dump({
-            "updatedAt": datetime.datetime.now().isoformat(),
+            "updatedAt": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(),
+                "updatedAtMs": int(time.time() * 1000),
             "dateStr": target_date_str,
             "eventType": ev_type,
             "payload": compact_payload,
