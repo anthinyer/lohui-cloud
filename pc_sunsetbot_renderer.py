@@ -1284,7 +1284,8 @@ def upload_grid_to_gitee(compact_payload, date_str, ev_type, grids_dict=None, ci
     ssl_ctx = ssl.create_default_context()
 
     payload_obj = {
-        "updatedAt": datetime.datetime.now().isoformat(),
+        "updatedAt": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(),
+                "updatedAtMs": int(time.time() * 1000),
         "dateStr": date_str,
         "eventType": ev_type,
         "gridPrecision": "0.1_LOSSLESS_UINT16",
