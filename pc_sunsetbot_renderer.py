@@ -961,10 +961,13 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
             high_visible = high_cloud * mid_occlude_high
 
             effective_cloud = 0.0
+            broken_edge = 0.0
             if high_visible > 0.0 or mid_visible > 0.0:
                 mid_weight = (0.45 + 0.25 * math.exp(-high_visible / 18.0)) if high_visible > 0.0 else 0.70
                 mid_contrib = mid_visible * (1.0 - high_visible / 100.0) * mid_weight
-                effective_cloud = round(high_visible + mid_contrib)
+                broken_edge = min(8.0, low_mid_cloud * 0.24) if (high_visible < 6.0 and 12.0 <= mid_visible <= 25.0 and 14.0 <= low_mid_cloud <= 32.0 and ray_trans >= 60.0) else 0.0
+                open_horizon = ((ray_trans - 88.0) / 10.0) * 5.5 if (10.0 <= high_visible <= 24.0 and low_mid_cloud <= 5.0 and ray_trans >= 90.0) else 0.0
+                effective_cloud = round(high_visible + mid_contrib + broken_edge + open_horizon)
 
             if effective_cloud <= 2.0:
                 prob_grid[r, c] = 0.0
@@ -976,8 +979,8 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
             if high_visible < 6.0 and mid_visible > 0.0:
                 no_cirrus_factor = (6.0 - high_visible) / 6.0
                 self_shadow = max(0.62, 1.0 - (mid_cloud - 22.0) * 0.008) if mid_cloud > 22.0 else 1.0
-                low_grazing_shadow = 1.0 - min(0.20, (low_mid_cloud / 100.0) * 0.65)
-                pure_mid_cap = 27.5 * self_shadow * low_grazing_shadow
+                low_grazing_shadow = 1.05 if broken_edge > 0.0 else (1.0 - min(0.20, (low_mid_cloud / 100.0) * 0.65))
+                pure_mid_cap = (27.5 + broken_edge * 0.65) * self_shadow * low_grazing_shadow
                 capped_canvas = min(canvas_raw, pure_mid_cap)
                 canvas_raw = canvas_raw * (1.0 - no_cirrus_factor) + capped_canvas * no_cirrus_factor
 
@@ -1024,8 +1027,8 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
             elif wmo_code == 45 or win_fog_code == 45:
                 effective_vis_km = min(effective_vis_km, 1.5)
 
-            is_shallow_blh_fog = (blh_m <= 450.0 and eff_rh >= 76.0 and eff_dd <= 3.5)
-            is_condensation_fog = (eff_rh >= 80.0 and eff_dd <= 3.0) or (eff_rh >= 85.0 and eff_dd <= 3.6) or (eff_rh >= 89.0) or is_shallow_blh_fog
+            is_shallow_blh_fog = (blh_m <= 400.0 and eff_rh >= 91.0 and eff_dd <= 1.4)
+            is_condensation_fog = (eff_rh >= 91.0 and eff_dd <= 1.4) or (eff_rh >= 93.0 and eff_dd <= 1.6) or (eff_rh >= 94.0) or is_shallow_blh_fog
             if is_condensation_fog:
                 safe_dd_val = max(0.2, eff_dd)
                 blh_scale = max(0.48, 0.45 + (blh_m / 450.0) * 0.35) if blh_m <= 450.0 else 0.78
