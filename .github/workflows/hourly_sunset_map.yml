@@ -2,8 +2,9 @@ name: LOHUI Hourly Cloud Vividness Map & 337-City Sync
 
 on:
   schedule:
-    # 错峰双保险触发 (每小时 07分 与 37分)：彻底避开 GitHub 整点 :00 全球排队拥堵与静默丢包！
-    - cron: '7,37 * * * *'
+    # 每小时 4 次错峰触发脉冲 (07分、22分、37分、52分) + 50分钟智能防重锁：
+    # 彻底解决 GitHub Actions 免费队列丢弃单次 cron 导致间隔数小时才跑一次的问题！
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -24,18 +25,42 @@ jobs:
       - name: 1. 检出仓库代码
         uses: actions/checkout@v4
 
-      - name: 2. 启用独立 Python 3.11 环境 (已移除 cache:pip，无需 requirements.txt)
+      - name: 2. 检查距上次成功更新是否已满 50 分钟 (手动触发永远强制执行)
+        id: check_interval
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "手动触发模式，立即执行更新！"
+            exit 0
+          fi
+          if [ -f ".last_cloud_sync_epoch.txt" ]; then
+            LAST_TS=$(cat .last_cloud_sync_epoch.txt | tr -d '[:space:]')
+            NOW_TS=$(date +%s)
+            DIFF=$((NOW_TS - LAST_TS))
+            echo "距上次云端同步已过: ${DIFF} 秒"
+            if [ "$DIFF" -lt 3000 ]; then
+              echo "距上次成功同步不足 50 分钟 (${DIFF}s < 3000s)，本轮脉冲自动跳过。"
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          echo "should_run=true" >> $GITHUB_OUTPUT
+
+      - name: 3. 启用独立 Python 3.11 环境
+        if: steps.check_interval.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 3. 安装科学计算依赖与中文字体支持
+      - name: 4. 安装科学计算依赖与中文字体支持
+        if: steps.check_interval.outputs.should_run == 'true'
         run: |
           sudo apt-get update -y || true
           sudo apt-get install -y fonts-noto-cjk || true
           pip install numpy scipy matplotlib
 
-      - name: 4. 执行控制点四源采集 + 500km 连续光路追踪 + Gitee 云端同步
+      - name: 5. 执行控制点四源采集 + 500km 连续光路追踪 + Gitee 云端同步
+        if: steps.check_interval.outputs.should_run == 'true'
         env:
           TZ: Asia/Shanghai
           GITEE_OWNER: ${{ secrets.GITEE_OWNER || 'anthinyer' }}
@@ -45,12 +70,14 @@ jobs:
           TODAY_BJ=$(TZ=Asia/Shanghai date +%Y-%m-%d)
           python3 pc_sunsetbot_renderer.py --date "$TODAY_BJ" --event all --cli
 
-      - name: 5. 自动保活机制 (防止 GitHub 连续 60 天无提交自动休眠定时任务)
+      - name: 6. 记录本次完成时间戳并保活
+        if: steps.check_interval.outputs.should_run == 'true'
         run: |
           NOW_BJ=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
+          date +%s > .last_cloud_sync_epoch.txt
           echo "Last Cloud Sync (UTC+8): $NOW_BJ" > .last_cloud_sync_heartbeat.txt
           git config user.name "LOHUI-Cloud-Bot"
           git config user.email "bot@lohui.local"
-          git add .last_cloud_sync_heartbeat.txt
+          git add .last_cloud_sync_epoch.txt .last_cloud_sync_heartbeat.txt
           git diff --staged --quiet || git commit -m "chore: hourly cloud sync heartbeat ($NOW_BJ)"
           git push || true
