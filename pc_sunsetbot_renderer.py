@@ -30,6 +30,8 @@ import concurrent.futures
 import re
 import subprocess
 import urllib.request
+import socket
+socket.setdefaulttimeout(20)
 import urllib.error
 import numpy as np
 from scipy.ndimage import gaussian_filter
@@ -605,17 +607,28 @@ def fetch_multi_source_weather_raw_batches(nodes, start_date_str, end_date_str, 
     tasks = [(idx, b, start_date_str, end_date_str) for idx, b in enumerate(batches)]
     completed = 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        for b_idx, entries in executor.map(_fetch_indexed_batch_worker, tasks):
-            raw_nodes_slots[b_idx] = entries
-            completed += 1
-            msg = f"正在并发采集 4 路卫星与实测场 ({completed}/{total_batches} 批完成, 当前批 {len(entries)} 节点)..."
-            print(f"  -> [1/2 四源并发采集] {msg}")
-            if progress_cb:
-                try:
-                    progress_cb(int(8 + (completed / max(1, total_batches)) * 52.0), msg)
-                except Exception:
-                    pass
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+    try:
+        future_to_idx = {executor.submit(_fetch_indexed_batch_worker, t): t[0] for t in tasks}
+        done_futs, not_done_futs = concurrent.futures.wait(future_to_idx.keys(), timeout=150)
+        for fut in done_futs:
+            try:
+                b_idx, entries = fut.result(timeout=2)
+                raw_nodes_slots[b_idx] = entries
+                completed += 1
+                msg = f"正在并发采集 4 路卫星与实测场 ({completed}/{total_batches} 批完成, 当前批 {len(entries)} 节点)..."
+                print(f"  -> [1/2 四源并发采集] {msg}", flush=True)
+                if progress_cb:
+                    try:
+                        progress_cb(int(8 + (completed / max(1, total_batches)) * 52.0), msg)
+                    except Exception:
+                        pass
+            except Exception as e_fut:
+                print(f"  [并发批次异常跳过]: {e_fut}", flush=True)
+        if not_done_futs:
+            print(f"  [超时保护] {len(not_done_futs)} 个慢速批次已超时跳过，继续使用已完成批次解算", flush=True)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     raw_nodes = []
     for sublist in raw_nodes_slots:
@@ -1160,17 +1173,18 @@ def _lookup_gitee_file_sha(owner, repo, path, token, headers, ssl_ctx):
                 return info["sha"]
     except Exception:
         pass
-    # 通道 3: Git Tree 查询
-    tree_url = f"https://gitee.com/api/v5/repos/{owner}/{repo}/git/trees/master?access_token={token}&_t={ts}"
-    try:
-        req_tree = urllib.request.Request(tree_url, headers=headers)
-        with urllib.request.urlopen(req_tree, timeout=12, context=ssl_ctx) as resp:
-            tinfo = json.loads(resp.read().decode("utf-8"))
-            for node in (tinfo.get("tree") or []):
-                if isinstance(node, dict) and node.get("path") == path and node.get("sha"):
-                    return node["sha"]
-    except Exception:
-        pass
+    # 通道 3: Git Tree 查询 (不受 1MB 文件大小限制，100% 获取大文件 SHA)
+    for branch_name in ("master", "main"):
+        tree_url = f"https://gitee.com/api/v5/repos/{owner}/{repo}/git/trees/{branch_name}?access_token={token}&_t={ts}"
+        try:
+            req_tree = urllib.request.Request(tree_url, headers=headers)
+            with urllib.request.urlopen(req_tree, timeout=12, context=ssl_ctx) as resp:
+                tinfo = json.loads(resp.read().decode("utf-8"))
+                for node in (tinfo.get("tree") or []):
+                    if isinstance(node, dict) and node.get("path") == path and node.get("sha"):
+                        return node["sha"]
+        except Exception:
+            pass
     return None
 
 
@@ -1245,7 +1259,10 @@ def compute_grid_hourly_diff_summary(new_grid, old_b64_token, land_mask, new_c33
             return f"较上期：全量四源高精场已更新 · 峰值 {new_max}分"
         old_grid = old_arr.reshape(o_rows, o_cols)
         if old_grid.shape != new_grid.shape:
-            return f"较上期：超清光路场已就绪 · 峰值 {new_max}分"
+            nr, nc = new_grid.shape
+            ri = np.clip(np.round(np.linspace(0, o_rows - 1, nr)).astype(int), 0, o_rows - 1)
+            ci = np.clip(np.round(np.linspace(0, o_cols - 1, nc)).astype(int), 0, o_cols - 1)
+            old_grid = old_grid[np.ix_(ri, ci)]
         land_cnt = max(1, int(np.sum(land_mask)))
         old_high = int(np.sum((old_grid >= 50.0) & land_mask))
         new_high = int(np.sum((new_grid >= 50.0) & land_mask))
@@ -1320,12 +1337,14 @@ def upload_grid_to_gitee(compact_payload, date_str, ev_type, grids_dict=None, ci
                 print(f"[云端同步成功] 已强制覆盖上传今明双日【朝霞+晚霞】全套 4 张高精网格至 Gitee ({owner}/{repo}/{path}, SHA={new_sha})！")
                 return True
         except Exception as e:
-            print(f"  [Gitee 同步重试 {attempt}/3] ({method}, sha={str(sha)[:8]}): {e}")
-            if sha and attempt == 2:
+            print(f"  [Gitee 同步重试 {attempt}/3] ({method}, sha={str(sha)[:8]}): {e}", flush=True)
+            del_sha = sha or _lookup_gitee_file_sha(owner, repo, path, token, headers, ssl_ctx)
+            if del_sha:
                 try:
-                    del_body = {"access_token": token, "sha": sha, "message": "Clean old vividness grid before fresh upload"}
+                    del_body = {"access_token": token, "sha": del_sha, "message": "Clean old vividness grid before fresh upload"}
                     req_del = urllib.request.Request(api_url, data=json.dumps(del_body).encode("utf-8"), headers=headers, method="DELETE")
                     urllib.request.urlopen(req_del, timeout=15, context=ssl_ctx).read()
+                    print(f"  [Gitee 自动清理] 已移除旧文件 (sha={str(del_sha)[:8]})，准备重新写入", flush=True)
                 except Exception:
                     pass
             time.sleep(1.2 * attempt)
@@ -2090,10 +2109,21 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
             recs = extract_event_records_from_raw(raw_nodes, day_offset=day_off, is_sunrise=sun_flag)
             p_grid = compute_2d_gridded_raytracing_vividness(recs, lats, lons, land_mask, is_sunrise=sun_flag)
 
-            # 100% 数学无损 0.1 分精度紧凑编码 (Uint16 Little-Endian: 0.0~100.0 -> 0~1000)
-            u16_bytes = np.clip(np.round(p_grid * 10.0), 0, 1000).astype("<u2").tobytes()
+            # 云端传输网格采用 150x260 (0.23°) 紧凑编码，使 4 场总 JSON 体积严格控制在 ~350KB (<1MB Gitee/微信缓存上限)，同时海报成图与337城提取保持 240x414 满血超清！
+            c_rows, c_cols = 150, 260
+            r_idx = np.linspace(0, rows - 1, c_rows)
+            c_idx = np.linspace(0, cols - 1, c_cols)
+            r0 = np.clip(np.floor(r_idx).astype(int), 0, rows - 1)
+            r1 = np.clip(r0 + 1, 0, rows - 1)
+            fr = (r_idx - r0)[:, None]
+            c0 = np.clip(np.floor(c_idx).astype(int), 0, cols - 1)
+            c1 = np.clip(c0 + 1, 0, cols - 1)
+            fc = (c_idx - c0)[None, :]
+            compact_grid = (1.0 - fr) * ((1.0 - fc) * p_grid[np.ix_(r0, c0)] + fc * p_grid[np.ix_(r0, c1)]) + \
+                           fr * ((1.0 - fc) * p_grid[np.ix_(r1, c0)] + fc * p_grid[np.ix_(r1, c1)])
+            u16_bytes = np.clip(np.round(compact_grid * 10.0), 0, 1000).astype("<u2").tobytes()
             b64_s = base64.b64encode(u16_bytes).decode("ascii")
-            payload_str = f"LOHUI_GRID_V1|{d_str}|{ev_type}|{rows}x{cols}|{b64_s}"
+            payload_str = f"LOHUI_GRID_V1|{d_str}|{ev_type}|{c_rows}x{c_cols}|{b64_s}"
 
             c337_cur = extract_337_cities_compact_ranking(p_grid, lats, lons)
             cities_337_dict[slot_key] = c337_cur
@@ -2321,3 +2351,6 @@ if __name__ == "__main__":
             run_all_modes=(args.event == "all"),
             quiet_mode=True
         )
+        if args.cli:
+            sys.stdout.flush()
+            os._exit(0)
