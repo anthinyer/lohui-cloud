@@ -8,11 +8,11 @@ on:
   workflow_dispatch:
   schedule:
     # 守护拉起脉冲：一旦容器启动，将在容器内常驻连续准点执勤 5 小时 (每小时 00分05秒 零延迟准时开跑)
-    - cron: '7,22,37,52 * * * *'
+    - cron: '7,37 * * * *'
 
 concurrency:
   group: lohui-hourly-cloud-sync
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -39,9 +39,10 @@ jobs:
           sudo apt-get install -y fonts-noto-cjk || true
           pip install numpy scipy matplotlib
 
-      - name: 4. 立即执行首轮渲染 + 连续 5 小时整点(XX:00:05)零延迟准时同步引擎
+      - name: 4. 立即执行首轮渲染 + 连续 5 小时整点(XX:00:05)零延迟准时同步引擎 (含 360s 进程级防卡死保护)
         env:
           TZ: Asia/Shanghai
+          PYTHONUNBUFFERED: "1"
           GITEE_OWNER: ${{ secrets.GITEE_OWNER || 'anthinyer' }}
           GITEE_REPO: ${{ secrets.GITEE_REPO || 'lohui-map' }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN || 'd80764b6192c664e0bfc2c555a95f03e' }}
@@ -52,13 +53,12 @@ jobs:
             echo "=================================================================="
             echo ">>> [第 ${ROUND}/5 轮准点执勤] 启动时间 (北京时间): ${NOW_BJ}"
             echo "=================================================================="
-            python3 pc_sunsetbot_renderer.py --date "$TODAY_BJ" --event all --cli || true
+            timeout --kill-after=10s 360s python3 -u pc_sunsetbot_renderer.py --date "$TODAY_BJ" --event all --cli || true
 
             DONE_BJ=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
             echo ">>> [第 ${ROUND}/5 轮完成] 已推送至 Gitee (完成时间: ${DONE_BJ})"
 
             if [ "$ROUND" -lt 5 ]; then
-              # 计算距离下一个整点 XX:00:05 的精确秒数，在已分配的热容器内零排队准点唤醒
               CUR_MIN=$(TZ=Asia/Shanghai date +%M)
               CUR_SEC=$(TZ=Asia/Shanghai date +%S)
               SLEEP_SEC=$(( (59 - 10#$CUR_MIN) * 60 + (60 - 10#$CUR_SEC) + 5 ))
