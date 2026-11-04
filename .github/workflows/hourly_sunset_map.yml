@@ -12,7 +12,8 @@ on:
 
 concurrency:
   group: lohui-hourly-cloud-sync
-  cancel-in-progress: false
+  # 当手动触发或修改代码推送时立即接管旧容器(绝不卡在"未决"排队)；当定时脉冲触发时保留正在执勤的热容器
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 permissions:
   contents: write
