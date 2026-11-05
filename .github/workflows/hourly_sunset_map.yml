@@ -7,8 +7,12 @@ on:
       - 'pc_sunsetbot_renderer.py'
   workflow_dispatch:
   schedule:
-    # 每小时触发一次单轮独立任务，每次仅运行 3~4 分钟即完成并显示绿勾
-    - cron: '5 * * * *'
+    # 每小时设 4 个错峰独立触发脉冲（避开整点拥堵，防止 GitHub 免费队列在高峰期漏跑），
+    # 配合下方 1 秒云端保鲜检测：每小时内首脉冲运行 3~4 分钟即完成打绿勾，其余备份脉冲若检测到已更新则 5 秒直接跳过打绿勾！
+    - cron: '8 * * * *'
+    - cron: '23 * * * *'
+    - cron: '38 * * * *'
+    - cron: '53 * * * *'
 
 concurrency:
   group: lohui-hourly-cloud-sync
@@ -33,13 +37,54 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 3. 安装科学计算依赖与中文字体支持
+      - name: 3. 1秒预检云端新鲜度 (防同小时重复渲染，同时兜底高峰期漏跑)
+        id: check_freshness
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GITEE_OWNER: ${{ secrets.GITEE_OWNER || 'anthinyer' }}
+          GITEE_REPO: ${{ secrets.GITEE_REPO || 'lohui-map' }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN || 'd80764b6192c664e0bfc2c555a95f03e' }}
+        run: |
+          python3 - << 'PYEOF'
+          import os, json, time, urllib.request, ssl
+          ev = os.environ.get("EVENT_NAME", "")
+          owner = os.environ.get("GITEE_OWNER", "anthinyer")
+          repo = os.environ.get("GITEE_REPO", "lohui-map")
+          tok = os.environ.get("GITEE_TOKEN", "")
+          gh_out = os.environ.get("GITHUB_OUTPUT", "")
+          should_run = "true"
+          if ev == "schedule":
+              try:
+                  url = f"https://gitee.com/api/v5/repos/{owner}/{repo}/commits?path=vividness_grid_latest.json&page=1&per_page=1&access_token={tok}&_t={int(time.time())}"
+                  req = urllib.request.Request(url, headers={"User-Agent": "LOHUI-Cloud-Check/1.0"})
+                  with urllib.request.urlopen(req, timeout=8, context=ssl.create_default_context()) as resp:
+                      arr = json.loads(resp.read().decode("utf-8"))
+                      if isinstance(arr, list) and arr:
+                          c_date = ((arr[0].get("commit") or {}).get("committer") or {}).get("date") or ""
+                          if c_date:
+                              from datetime import datetime
+                              dt = datetime.fromisoformat(c_date.replace("Z", "+00:00"))
+                              age_min = (time.time() - dt.timestamp()) / 60.0
+                              print(f"[预检] Gitee 最新云端数据距今: {age_min:.1f} 分钟 (提交时间: {c_date})")
+                              if age_min < 42.0:
+                                  print(">>> 本小时内已成功同步过最新数据 (<42分钟)，本次错峰备份脉冲直接 5 秒快速收工！")
+                                  should_run = "false"
+              except Exception as e:
+                  print(f"[预检提示] 继续执行全量解算: {e}")
+          if gh_out:
+              with open(gh_out, "a", encoding="utf-8") as f:
+                  f.write(f"should_run={should_run}\n")
+          PYEOF
+
+      - name: 4. 安装科学计算依赖与中文字体支持
+        if: steps.check_freshness.outputs.should_run == 'true'
         run: |
           sudo apt-get update -y || true
           sudo apt-get install -y fonts-noto-cjk || true
           pip install numpy scipy matplotlib
 
-      - name: 4. 单轮极速解算并推送至 Gitee (约 3~4 分钟即刻结束)
+      - name: 5. 单轮极速解算并推送至 Gitee (约 3~4 分钟即刻结束)
+        if: steps.check_freshness.outputs.should_run == 'true'
         env:
           TZ: Asia/Shanghai
           PYTHONUNBUFFERED: "1"
@@ -47,6 +92,16 @@ jobs:
           GITEE_REPO: ${{ secrets.GITEE_REPO || 'lohui-map' }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN || 'd80764b6192c664e0bfc2c555a95f03e' }}
         run: |
+          # 自动修复仓库内旧版 pc_sunsetbot_renderer.py 顶部缺失 import sys 导致结尾退出的报错
+          python3 - << 'PYFIX'
+          with open("pc_sunsetbot_renderer.py", "r", encoding="utf-8") as f:
+              code = f.read()
+          if "\nimport sys\n" not in code:
+              code = code.replace("\nimport os\n", "\nimport os\nimport sys\n", 1)
+              with open("pc_sunsetbot_renderer.py", "w", encoding="utf-8") as f:
+                  f.write(code)
+              print("[自动修复] 已为 pc_sunsetbot_renderer.py 补齐顶部 import sys")
+          PYFIX
           TODAY_BJ=$(TZ=Asia/Shanghai date +%Y-%m-%d)
           NOW_BJ=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
           echo ">>> 启动单轮云端高精渲染与 337 城同步 (北京时间: ${NOW_BJ})"
@@ -54,12 +109,13 @@ jobs:
           DONE_BJ=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
           echo ">>> 本轮渲染与 Gitee 同步全部完成 (完成时间: ${DONE_BJ})"
 
-      - name: 5. 更新仓库心跳时间戳 (防止 GitHub 60天自动休眠定时任务)
+      - name: 6. 更新仓库心跳时间戳与脚本自愈写回 (防止 GitHub 自动休眠定时任务)
+        if: steps.check_freshness.outputs.should_run == 'true'
         run: |
           NOW_BJ=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
           echo "Last Cloud Sync (UTC+8): $NOW_BJ" > .last_cloud_sync_heartbeat.txt
           git config user.name "LOHUI-Cloud-Bot"
           git config user.email "bot@lohui.local"
-          git add .last_cloud_sync_heartbeat.txt
+          git add .last_cloud_sync_heartbeat.txt pc_sunsetbot_renderer.py
           git diff --staged --quiet || git commit -m "chore: hourly cloud sync heartbeat ($NOW_BJ)"
           git push || true
