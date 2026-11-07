@@ -1049,16 +1049,14 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                 thermo_vis_cap = max(0.6, (0.65 + safe_dd_val * 0.75 + max(0.0, 90.0 - eff_rh) * 0.12) * blh_scale)
                 effective_vis_km = min(effective_vis_km, thermo_vis_cap)
 
-            if (pm25_val >= 32.0 and eff_rh >= 68.0) or (aod >= 0.28 and eff_rh >= 70.0):
-                eff_pm25 = max(pm25_val, aod * 85.0)
-                hygro_growth = 1.25 + ((max(0.0, min(98.0, eff_rh) - 65.0) / 22.0) ** 1.45) * 4.2
-                blh_trap = 1.35 if blh_m <= 450.0 else 1.0
-                pm_extinct = ((eff_pm25 * 0.0062 * hygro_growth) + (aod * 0.58)) * blh_trap
-                hygro_vis_cap = max(0.9, 3.912 / max(0.18, pm_extinct))
-                effective_vis_km = min(effective_vis_km, hygro_vis_cap)
-            elif aod >= 0.35:
-                aod_vis_cap = max(1.5, 3.912 / max(0.20, aod * 1.15))
-                effective_vis_km = min(effective_vis_km, aod_vis_cap)
+            if pm25_val >= 65.0 or aod >= 0.55:
+                hygro_growth = (1.0 + (((max(0.0, min(95.0, eff_rh) - 72.0) / 23.0) ** 1.6) * 1.35)) if eff_rh >= 75.0 else 1.0
+                aod_bext = ((aod / 1.85) * hygro_growth) if aod >= 0.55 else 0.0
+                pm_bext = (pm25_val * 0.0032 * hygro_growth) if pm25_val >= 65.0 else 0.0
+                aero_extinct = max(aod_bext, pm_bext)
+                if aero_extinct > 0.15:
+                    hygro_vis_cap = max(1.8, 3.912 / aero_extinct)
+                    effective_vis_km = min(effective_vis_km, hygro_vis_cap)
 
             if pm10_val >= 120.0:
                 effective_vis_km = min(effective_vis_km, max(1.2, 1800.0 / pm10_val))
