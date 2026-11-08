@@ -1299,16 +1299,30 @@ def upload_grid_to_gitee(compact_payload, date_str, ev_type, grids_dict=None, ci
     }
     ssl_ctx = ssl.create_default_context()
 
+    fb_replies_list = []
+    try:
+        fb_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feedback_replies.json")
+        if os.path.exists(fb_path):
+            with open(fb_path, "r", encoding="utf-8") as f_fb:
+                fb_obj = json.load(f_fb)
+                if isinstance(fb_obj, dict) and isinstance(fb_obj.get("replies"), list):
+                    fb_replies_list = fb_obj["replies"]
+                elif isinstance(fb_obj, list):
+                    fb_replies_list = fb_obj
+    except Exception:
+        pass
+
     payload_obj = {
         "updatedAt": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(),
-                "updatedAtMs": int(time.time() * 1000),
+        "updatedAtMs": int(time.time() * 1000),
         "dateStr": date_str,
         "eventType": ev_type,
         "gridPrecision": "0.1_LOSSLESS_UINT16",
         "payload": compact_payload,
         "grids": grids_dict or {f"{date_str}_{ev_type}": compact_payload},
         "cities_337": cities_337_dict or {},
-        "diff_summaries": diff_summaries or {}
+        "diff_summaries": diff_summaries or {},
+        "feedback_replies": fb_replies_list
     }
     raw_bytes = json.dumps(payload_obj, ensure_ascii=False).encode("utf-8")
     b64_content = base64.b64encode(raw_bytes).decode("ascii")
