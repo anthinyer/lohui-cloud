@@ -105,7 +105,7 @@ jobs:
           TODAY_BJ=$(TZ=Asia/Shanghai date +%Y-%m-%d)
           NOW_BJ=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
           echo ">>> 启动单轮云端高精渲染与 337 城同步 (北京时间: ${NOW_BJ})"
-          timeout --kill-after=10s 360s python3 -u pc_sunsetbot_renderer.py --date "$TODAY_BJ" --event all --cli
+          timeout --kill-after=15s 540s python3 -u pc_sunsetbot_renderer.py --date "$TODAY_BJ" --event all --cli
           DONE_BJ=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
           echo ">>> 本轮渲染与 Gitee 同步全部完成 (完成时间: ${DONE_BJ})"
 
