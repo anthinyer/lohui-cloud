@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 r"""
 ===============================================================================
-LOHUI V11.0.90 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
+LOHUI V11.0.91 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
 
 核心特性 (对标莉景天气 / Sunsetbot C1 专业版 4:3 无拉伸火烧云地图规范):
 1. 严格锁定 1/cos(35°) 真实地理纵横比 (4:3 标准横幅 2640x1980)，彻底消除中国版图纵向拉伸变形;
@@ -962,11 +962,18 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                 # 青藏高原/川西高原/云贵高原高海拔洁净大气增益
                 ray_trans = min(99.0, ray_trans * 1.05)
 
-            # V11.0.90 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
+            # V11.0.91 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
+            clamp01 = lambda v: max(0.0, min(1.0, float(v)))
+            double_deck_w = (clamp01((high_cloud - 63.0) / 4.0)
+                * clamp01((84.0 - high_cloud) / 4.0)
+                * clamp01((mid_cloud - 13.0) / 5.0)
+                * clamp01((52.0 - mid_cloud) / 4.0)
+                * clamp01((9.0 - low_mid_cloud) / 4.0)
+                * clamp01((ray_trans - 70.0) / 4.0)
+                * clamp01((vis_km - 10.8) / 1.2))
             is_gz_broken_edge = (12.0 <= high_cloud <= 18.0 and mid_cloud >= 96.0 and 6.0 <= low_mid_cloud <= 12.0 and ray_trans >= 76.0)
-            is_mackerel_3d = (66.0 <= high_cloud <= 82.0 and 18.0 <= mid_cloud <= 38.0 and low_mid_cloud <= 8.0 and ray_trans >= 82.0 and rh <= 64.0 and vis_km >= 18.0)
-            is_nanjing_3d = is_mackerel_3d or (66.0 <= high_cloud <= 76.0 and 15.0 <= mid_cloud <= 52.0 and low_mid_cloud <= 3.0 and 73.0 <= ray_trans <= 76.0 and 11.2 <= vis_km <= 13.0)
-            is_local_basin_grey_lid = (not is_gz_broken_edge and not is_nanjing_3d and vis_km < 31.5 and mid_cloud >= 38.0 and (high_cloud <= 70.0 or mid_cloud >= high_cloud * 0.75))
+            is_nanjing_3d = (double_deck_w >= 0.5)
+            is_local_basin_grey_lid = (not is_gz_broken_edge and double_deck_w < 0.25 and vis_km < 31.5 and mid_cloud >= 38.0 and (high_cloud <= 64.0 or mid_cloud >= high_cloud * 0.75))
 
             if is_local_basin_grey_lid:
                 low_mid_cloud = max(low_mid_cloud, float(min(54, round(mid_cloud * 0.84))))
@@ -977,10 +984,11 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                     high_cloud = max(high_cloud, round(west_high_max * 0.36 * clean_local_gate))
                     mid_cloud = max(mid_cloud, round(west_mid_max * 0.34 * clean_local_gate))
 
-            # --- 1. 核心受光画布 (与 scoringCore.js V11.0.90 100% 同源) ---
+            # --- 1. 核心受光画布 (与 scoringCore.js V11.0.91 100% 同源) ---
             low_obs = max(0.0, min(1.0, low_mid_cloud / 100.0))
             mid_visible = mid_cloud * (1.0 - low_obs * 0.55)
-            continuous_mid_shade = max(0.08, 1.0 - (min(1.0, (mid_cloud - 22.0) / 55.0) ** 1.10) * 0.88) if (not is_nanjing_3d and vis_km < 31.5 and mid_cloud > 22.0) else 1.0
+            raw_mid_shade = max(0.08, 1.0 - (min(1.0, (mid_cloud - 22.0) / 55.0) ** 1.10) * 0.88) if (vis_km < 31.5 and mid_cloud > 22.0) else 1.0
+            continuous_mid_shade = raw_mid_shade + (1.0 - raw_mid_shade) * double_deck_w
             mid_occlude_high = min(0.28, continuous_mid_shade) if is_local_basin_grey_lid else continuous_mid_shade
             low_occlude_high = max(0.25, 1.0 - (((low_mid_cloud - 25.0) / 60.0) ** 1.15) * 0.65) if low_mid_cloud > 25.0 else 1.0
             high_visible = high_cloud * mid_occlude_high * low_occlude_high
@@ -996,12 +1004,18 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
 
             canvas_raw = calc_double_logistic_canvas_py(effective_cloud)
 
-            # V11.0.90 连续中云主导画布约束 (消除中云 35%~95% 板结灰云盖虚高)
-            is_coastal_multilayer_glow = (vis_km >= 23.5 and high_cloud >= 42.0 and 20.0 <= mid_cloud <= 35.0 and mid_cloud < high_cloud * 0.65 and low_mid_cloud <= 34.0 and ray_trans >= 60.0)
+            # V11.0.91 连续中云主导画布约束 (消除中云 35%~95% 板结灰云盖虚高)
+            coastal_multilayer_w = (clamp01((vis_km - 19.5) / 4.5)
+                * clamp01((high_cloud - 38.0) / 8.0)
+                * clamp01((high_cloud * 0.68 - mid_cloud) / 8.0)
+                * clamp01((36.0 - low_mid_cloud) / 8.0)
+                * clamp01((ray_trans - 56.0) / 8.0))
+            is_coastal_multilayer_glow = (coastal_multilayer_w >= 0.5)
             if is_gz_broken_edge:
                 canvas_raw = min(canvas_raw, 25.0)
-            elif not is_nanjing_3d and not is_coastal_multilayer_glow and vis_km < 31.5 and mid_visible >= 18.0 and (high_cloud < 36.0 or mid_cloud >= high_cloud * 0.65 or vis_km < 23.0):
-                mid_dom_w = min(1.0, max(0.0, (mid_visible - 16.0) / 14.0)) * min(1.0, max(0.0, (74.0 - high_cloud) / 12.0))
+            elif double_deck_w < 0.99 and vis_km < 31.5 and mid_visible >= 18.0:
+                mid_ratio_gate = max(clamp01((38.0 - high_cloud) / 10.0), clamp01((mid_cloud - high_cloud * 0.58) / 10.0), clamp01((22.5 - vis_km) / 3.5))
+                mid_dom_w = clamp01((mid_visible - 16.0) / 14.0) * clamp01((74.0 - high_cloud) / 12.0) * mid_ratio_gate * (1.0 - double_deck_w) * (1.0 - coastal_multilayer_w)
                 self_shadow = max(0.38, 1.0 - (mid_cloud - 25.0) * 0.012) if mid_cloud > 25.0 else 1.0
                 high_assist = min(6.5, high_visible * 0.16)
                 mid_cap_canvas = (23.5 + high_assist + broken_edge * 0.65) * self_shadow
@@ -1031,32 +1045,36 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
             is_multi_layer_3d = False
             is_hazy_flat_cirrus = False
             cirrus_low_thresh = 60.0 if (mid_cloud >= 1.0 and low_mid_cloud <= 5.0 and ray_trans >= 72.0) else 68.0
-            is_underlit_canopy_flakes = (high_cloud >= 88.0 and 3.0 <= mid_cloud <= 12.0 and low_mid_cloud <= 3.0 and ray_trans >= 88.0 and 9.5 <= vis_km <= 16.0)
-            is_hazy_sparse_single = (18.0 <= high_cloud <= 34.0 and mid_cloud <= 3.0 and low_mid_cloud <= 10.0 and vis_km < 13.6)
-            is_hazy_low_contam_single = (38.0 <= high_cloud <= 58.0 and mid_cloud <= 2.0 and low_mid_cloud <= 15.0 and vis_km < 14.6 and ray_trans <= 91.0)
+            underlit_flake_w = (clamp01((high_cloud - 85.0) / 5.0)
+                * clamp01((mid_cloud - 2.0) / 2.5)
+                * clamp01((14.0 - mid_cloud) / 3.0)
+                * clamp01((4.0 - low_mid_cloud) / 2.0)
+                * clamp01((ray_trans - 85.0) / 5.0)
+                * clamp01((vis_km - 8.5) / 1.2))
+            is_underlit_canopy_flakes = (underlit_flake_w >= 0.45)
+            is_hazy_sparse_single = (18.0 <= high_cloud <= 38.0 and mid_cloud <= 3.0 and low_mid_cloud <= 10.0 and vis_km < 13.6)
+            is_hazy_low_contam_single = (18.0 <= high_cloud <= 62.0 and mid_cloud <= 3.0 and low_mid_cloud <= 15.0 and vis_km < 14.6 and ray_trans <= 91.0)
 
-            if high_cloud >= 70.0 and mid_cloud <= 2.0 and low_mid_cloud <= 10.0 and vis_km < 14.0:
-                is_hazy_flat_cirrus = True
-                haze_w = min(1.0, (14.0 - vis_km) / 2.2) * min(1.0, (high_cloud - 68.0) / 8.0) * max(0.0, 1.0 - mid_cloud / 3.0)
-                canvas_raw = canvas_raw * (1.0 - haze_w) + min(canvas_raw, 5.5) * haze_w
-            elif is_hazy_sparse_single:
-                is_hazy_flat_cirrus = True
-                sparse_w = min(1.0, (13.6 - vis_km) / 0.6) * max(0.0, 1.0 - max(0.0, mid_cloud - 2.0) / 3.0)
-                canvas_raw = canvas_raw * (1.0 - sparse_w) + min(canvas_raw, 3.2) * sparse_w
-            elif is_hazy_low_contam_single:
-                is_hazy_flat_cirrus = True
-                contam_w = min(1.0, (14.6 - vis_km) / 0.35) * min(1.0, (92.0 - ray_trans) / 2.5)
-                low_contam_r = min(1.0, max(0.0, low_mid_cloud / 7.0))
-                dull_contam_cap = 36.0 * (1.0 - low_contam_r) + 1.8 * low_contam_r
-                canvas_raw = canvas_raw * (1.0 - contam_w) + min(canvas_raw, dull_contam_cap) * contam_w
-            elif is_underlit_canopy_flakes:
-                cirrus_purity = 0.78
-                flake_r = min(1.0, max(0.4, (mid_cloud - 2.0) / 4.0))
-                canvas_raw = max(canvas_raw * 0.72, 70.0 + 6.0 * flake_r)
-            elif is_nanjing_3d:
-                is_multi_layer_3d = True
-                cirrus_purity = 0.92
-                canvas_raw = max(canvas_raw, 95.0)
+            if high_cloud >= 18.0 and mid_cloud <= 3.5 and low_mid_cloud <= 15.0 and vis_km < 14.6 and double_deck_w < 0.2:
+                no_mid_f = clamp01((3.5 - mid_cloud) / 1.8)
+                strong_haze_w = clamp01((13.6 - vis_km) / 0.8) * no_mid_f * max(clamp01((40.0 - high_cloud) / 8.0), clamp01((high_cloud - 66.0) / 6.0))
+                mod_haze_corr_w = clamp01((14.6 - vis_km) / 0.45) * clamp01((92.0 - ray_trans) / 3.0) * no_mid_f
+                comb_haze_w = max(strong_haze_w, mod_haze_corr_w)
+                if comb_haze_w > 0.01:
+                    is_hazy_flat_cirrus = (comb_haze_w >= 0.35)
+                    low_contam_r = clamp01(low_mid_cloud / 7.0)
+                    mod_cap = 36.0 * (1.0 - low_contam_r) + 1.8 * low_contam_r
+                    strong_cap = 5.5 if high_cloud >= 66.0 else 3.2
+                    target_haze_cap = strong_cap if strong_haze_w >= mod_haze_corr_w else (mod_cap * (1.0 - strong_haze_w) + strong_cap * strong_haze_w)
+                    canvas_raw = canvas_raw * (1.0 - comb_haze_w) + min(canvas_raw, target_haze_cap) * comb_haze_w
+            elif underlit_flake_w > 0.05:
+                cirrus_purity = max(cirrus_purity, 0.78 * underlit_flake_w)
+                flake_r = clamp01((mid_cloud - 2.0) / 4.0)
+                canvas_raw = canvas_raw * (1.0 - underlit_flake_w) + max(canvas_raw * 0.72, 70.0 + 6.0 * flake_r) * underlit_flake_w
+            elif double_deck_w > 0.05:
+                is_multi_layer_3d = (double_deck_w >= 0.45)
+                cirrus_purity = max(cirrus_purity, 0.92 * double_deck_w)
+                canvas_raw = canvas_raw * (1.0 - double_deck_w) + max(canvas_raw, 95.0) * double_deck_w
             elif high_cloud >= cirrus_low_thresh and low_mid_cloud <= 25.0 and mid_cloud <= 22.0 and ray_trans >= 38.0:
                 clean_low = max(0.0, 1.0 - low_mid_cloud / 26.0)
                 clean_mid = max(0.0, 1.0 - mid_cloud / 46.0)
@@ -1093,8 +1111,8 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
             canvas_norm = canvas / 100.0
             raw_trans_norm = max(0.01, min(1.0, ray_trans / 100.0))
             trans_norm = min(0.95, raw_trans_norm + cirrus_purity * 0.25) if cirrus_purity > 0.0 else raw_trans_norm
-            if is_coastal_multilayer_glow:
-                trans_norm = min(0.92, max(trans_norm, raw_trans_norm + 0.16))
+            if coastal_multilayer_w > 0.01:
+                trans_norm = min(0.92, max(trans_norm, raw_trans_norm + 0.16 * coastal_multilayer_w))
             if is_ultra_clear_leewave:
                 trans_norm = max(trans_norm, 0.90)
 
@@ -1111,7 +1129,7 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
             ambient = trans_norm * 12.0 * math.sqrt(canvas_norm)
             base_potential = (coupled + ambient) * f_corridor_choke
 
-            # --- 2. 低云门控与盆地灰云盖闭合抑制 (与 scoringCore.js V11.0.90 100% 同构) ---
+            # --- 2. 低云门控与盆地灰云盖闭合抑制 (与 scoringCore.js V11.0.91 100% 同构) ---
             f_low = 1.0
             if is_local_basin_grey_lid and low_mid_cloud < 42.0:
                 lid_dom = min(1.0, max(0.20, (mid_cloud - 34.0) / 16.0)) * min(1.0, (72.0 - high_cloud) / 8.0)
@@ -1126,8 +1144,8 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                     f_low *= max(0.04, 1.0 - (dense_r ** 1.10) * 0.94)
                 if is_ultra_clear_leewave:
                     f_low = max(f_low, 0.94 * leewave_gap)
-                elif is_coastal_multilayer_glow:
-                    f_low = max(f_low, 0.96)
+                elif coastal_multilayer_w > 0.01:
+                    f_low = f_low * (1.0 - coastal_multilayer_w) + max(f_low, 0.96) * coastal_multilayer_w
                 elif low_mid_cloud >= 70.0:
                     f_low = 0.0
 
@@ -1207,12 +1225,12 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                     f_vis = max(0.03, (max(0.1, effective_vis_km) / 1.5) * 0.06)
 
             is_surface_fog_haze = (effective_vis_km < 10.0) or (rh >= 86.0) or (effective_aod > 0.45)
-            if is_multi_layer_3d:
-                f_aod = max(f_aod, 0.95)
-                f_vis = max(f_vis, 0.96)
-            elif is_underlit_canopy_flakes:
-                f_aod = max(f_aod, 0.94)
-                f_vis = max(f_vis, 0.95)
+            if double_deck_w > 0.05:
+                f_aod = f_aod * (1.0 - double_deck_w) + max(f_aod, 0.95) * double_deck_w
+                f_vis = f_vis * (1.0 - double_deck_w) + max(f_vis, 0.96) * double_deck_w
+            elif underlit_flake_w > 0.05:
+                f_aod = f_aod * (1.0 - underlit_flake_w) + max(f_aod, 0.94) * underlit_flake_w
+                f_vis = f_vis * (1.0 - underlit_flake_w) + max(f_vis, 0.95) * underlit_flake_w
             elif high_cloud >= 30.0 and low_mid_cloud <= 45.0 and not is_surface_fog_haze:
                 f_aod = min(1.0, f_aod * 1.02)
             safe_dew = min(1.02, f_dew) if f_dew > 1.0 else f_dew
@@ -2190,7 +2208,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
 
     if run_all_modes:
         print("=" * 78)
-        print(f"[LOHUI V11.0.90 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
+        print(f"[LOHUI V11.0.91 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
         print(f"  -> 数据源: ECMWF/GFS + CAMS气溶胶 + 风云四号(FY-4B)/CMA + 葵花-9号短波辐射")
         print(f"  -> 光路积分: 500km 连续20步射线积分 + DEM高原盆地遮挡修正 | 0.1分无损Uint16编码")
         print("=" * 78)
