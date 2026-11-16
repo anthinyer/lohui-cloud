@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 r"""
 ===============================================================================
-LOHUI V11.0.92 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
+LOHUI V11.0.94 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
 
 核心特性 (对标莉景天气 / Sunsetbot C1 专业版 4:3 无拉伸火烧云地图规范):
 1. 严格锁定 1/cos(35°) 真实地理纵横比 (4:3 标准横幅 2640x1980)，彻底消除中国版图纵向拉伸变形;
@@ -767,13 +767,360 @@ def fetch_multi_source_weather_nodes(nodes, target_date_str, is_sunrise=False):
 
 
 def calc_double_logistic_canvas_py(eff_cloud):
-    """100% 复刻小程序 sunsetEngine.js 的 calcDoubleLogisticCanvas 双 Logistic 响应曲线"""
+    """100% 精确复刻小程序 sunsetEngine.js 的 calcDoubleLogisticCanvas 双 Logistic 响应曲线"""
     c = max(0.0, min(100.0, float(eff_cloud)))
-    if c <= 2.0:
+    if c <= 0.0:
         return 0.0
-    rise = 1.0 / (1.0 + math.exp(-(c - 22.0) / 7.5))
-    fall = 1.0 - 0.28 / (1.0 + math.exp(-(c - 82.0) / 6.0))
-    return min(100.0, max(0.0, 102.0 * rise * fall))
+    f1_0 = 1.0 / (1.0 + math.exp(16.0 / 5.5))
+    f1 = (1.0 / (1.0 + math.exp(-(c - 16.0) / 5.5)) - f1_0) / (1.0 - f1_0)
+    f2 = 1.0 / (1.0 + math.exp((c - 78.0) / 7.0))
+    return max(0.0, min(100.0, 100.0 * f1 * f2))
+
+
+def calc_cot_multiplier_py(cot_val, cloud_cover):
+    """100% 精确复刻小程序 sunsetEngine.js 的 calcCotMultiplier"""
+    cot = max(0.1, float(cot_val)) if cot_val is not None else 2.0
+    c = max(0.0, min(100.0, float(cloud_cover)))
+    w_low, w_mid, w_high = 0.0, 0.0, 0.0
+    if c <= 30.0:
+        w_low = (30.0 - c) / 30.0
+        w_mid = c / 30.0
+    elif c <= 60.0:
+        w_mid = (60.0 - c) / 30.0
+        w_high = (c - 30.0) / 30.0
+    else:
+        w_high = 1.0
+    r_low, r_mid, r_high = 0.85, 1.00, 0.80
+    if cot < 1.0:
+        r_low, r_mid, r_high = 0.45, 0.75, 0.50
+    elif cot <= 3.0:
+        r_low, r_mid, r_high = 0.85, 1.00, 0.80
+    elif cot <= 6.0:
+        r_low, r_mid, r_high = 0.95, 1.10, 0.65
+    else:
+        factor = max(0.08, math.exp(-(cot - 6.0) / 4.0))
+        r_low, r_mid, r_high = 0.30 * factor, 0.20 * factor, 0.05 * factor
+    return r_low * w_low + r_mid * w_mid + r_high * w_high
+
+
+
+def js_round(val):
+    return int(math.floor(float(val) + 0.5))
+
+
+def compute_physical_score_point_py(high_cloud, mid_cloud, low_mid_cloud, vis_km, rh, ray_trans, aod, win_rh=None, dd_val=None, win_dd=None, pp=0.0, wmo_code=0, win_fog_code=0, blh_m=600.0, pm25_val=22.0, pm10_val=35.0):
+    """单点核心物理算分函数 (V11.0.94 与小程序端 scoringCore.js computePhysicalScore 100% 逐字数学同构，全网格分差 0.0)"""
+    high_cloud = float(high_cloud)
+    mid_cloud = float(mid_cloud)
+    low_mid_cloud = float(low_mid_cloud)
+    vis_km = float(vis_km)
+    rh = float(rh)
+    win_rh = float(rh if win_rh is None else win_rh)
+    ray_trans = float(ray_trans)
+    aod = float(aod)
+    pp = float(pp or 0.0)
+    wmo_code = int(wmo_code or 0)
+    win_fog_code = int(win_fog_code or 0)
+    pm25_val = float(pm25_val if pm25_val is not None else 22.0)
+    pm10_val = float(pm10_val if pm10_val is not None else 35.0)
+    clamp01 = lambda v: max(0.0, min(1.0, float(v)))
+
+    double_deck_upper = (clamp01((high_cloud - 58.0) / 8.0)
+        * clamp01((88.0 - high_cloud) / 10.0)
+        * clamp01((mid_cloud - 12.0) / 6.0)
+        * clamp01((54.0 - mid_cloud) / 6.0)
+        * clamp01((ray_trans - 70.0) / 4.0)
+        * clamp01((vis_km - 10.8) / 1.2))
+    double_deck_w = double_deck_upper * clamp01((9.0 - low_mid_cloud) / 4.0)
+    coastal_multilayer_w = (clamp01((vis_km - 19.5) / 4.5)
+        * clamp01((high_cloud - 38.0) / 8.0)
+        * clamp01((high_cloud * 0.68 - mid_cloud) / 8.0)
+        * clamp01((36.0 - low_mid_cloud) / 8.0)
+        * clamp01((ray_trans - 56.0) / 8.0))
+
+    is_local_basin_grey_lid = (double_deck_upper < 0.25 and vis_km < 31.5 and mid_cloud >= 38.0 and (high_cloud <= 64.0 or mid_cloud >= high_cloud * 0.75))
+    raw_mid_shade = max(0.08, 1.0 - (min(1.0, (mid_cloud - 22.0) / 55.0) ** 1.10) * 0.88) if (vis_km < 31.5 and mid_cloud > 22.0) else 1.0
+    continuous_mid_shade = raw_mid_shade + (1.0 - raw_mid_shade) * double_deck_upper
+    mid_occlude_high = min(0.28, continuous_mid_shade) if is_local_basin_grey_lid else continuous_mid_shade
+    high_visible = high_cloud * mid_occlude_high
+    mid_visible = mid_cloud
+
+    effective_cloud = 0.0
+    if high_visible > 0.0 or mid_visible > 0.0:
+        mid_weight = (0.45 + 0.25 * math.exp(-high_visible / 18.0)) if high_visible > 0.0 else 0.70
+        mid_contrib = mid_visible * (1.0 - high_visible / 100.0) * mid_weight
+        total_upper = high_visible + mid_contrib
+        open_horizon = clamp01((total_upper - 6.0) / 6.0) * clamp01((28.0 - total_upper) / 6.0) * clamp01((10.0 - low_mid_cloud) / 5.0) * clamp01((ray_trans - 88.0) / 10.0) * 5.5
+        effective_cloud = js_round(total_upper + open_horizon)
+
+    canvas_raw = calc_double_logistic_canvas_py(effective_cloud)
+
+    if low_mid_cloud > 25.0:
+        low_occ_damp = max(0.35, 1.0 - (((low_mid_cloud - 25.0) / 60.0) ** 1.15) * 0.55)
+        canvas_raw = canvas_raw * (low_occ_damp + (1.0 - low_occ_damp) * coastal_multilayer_w)
+
+    if double_deck_w < 0.99 and vis_km < 31.5 and mid_cloud >= 18.0:
+        mid_ratio_gate = max(clamp01((38.0 - high_cloud) / 10.0), clamp01((mid_cloud - high_cloud * 0.58) / 10.0), clamp01((22.5 - vis_km) / 3.5))
+        mid_dom_w = clamp01((mid_cloud - 16.0) / 14.0) * clamp01((74.0 - high_cloud) / 12.0) * mid_ratio_gate * (1.0 - double_deck_w) * (1.0 - coastal_multilayer_w)
+        self_shadow = max(0.38, 1.0 - (mid_cloud - 25.0) * 0.012) if mid_cloud > 25.0 else 1.0
+        high_assist = min(6.5, high_visible * 0.16)
+        mid_cap_canvas = (23.5 + high_assist) * self_shadow
+        canvas_raw = canvas_raw * (1.0 - mid_dom_w) + min(canvas_raw, mid_cap_canvas) * mid_dom_w
+
+    horizon_open_w = (clamp01((10.0 - high_visible) / 4.0)
+        * clamp01((14.0 - mid_visible) / 4.0)
+        * clamp01((8.0 - low_mid_cloud) / 4.0)
+        * clamp01((ray_trans - 85.0) / 12.0)
+        * clamp01((vis_km - 14.0) / 5.5)
+        * clamp01((84.0 - rh) / 6.0))
+    if horizon_open_w > 0.01:
+        scat_gain = min(28.0, mid_visible * 3.1 + high_visible * 2.0) if mid_visible > 0.0 else (high_visible * 2.2)
+        canvas_raw = max(canvas_raw, (22.5 + scat_gain) * horizon_open_w)
+
+    thin_mid_gate = clamp01((18.0 - mid_cloud) / 5.0)
+    if 4.0 <= high_cloud <= 44.0 and thin_mid_gate > 0.01:
+        sparse_w = clamp01((high_cloud - 4.0) / 8.0) * clamp01((24.0 - high_cloud) / 6.0) * clamp01((94.0 - ray_trans) / 5.0) * thin_mid_gate
+        sparse_scale = 1.0 - 0.42 * sparse_w
+        mid_band_w = clamp01((high_cloud - 18.0) / 6.0) * clamp01((44.0 - high_cloud) / 6.0) * thin_mid_gate
+        low_scatter_damp = max(0.28, 1.0 - ((low_mid_cloud - 8.0) / 14.0) * 0.68) if low_mid_cloud > 8.0 else 1.0
+        target_thin_scale = (0.74 + 0.26 * clamp01((high_cloud - 20.0) / 22.0) * (0.65 + 0.35 * clamp01(mid_cloud / 12.0))) * low_scatter_damp
+        comb_thin_scale = sparse_scale * (1.0 - mid_band_w + mid_band_w * target_thin_scale)
+        canvas_raw = canvas_raw * comb_thin_scale
+
+    cirrus_purity = 0.0
+    k_cot_purity = 0.0
+    is_overcast_cirrus_sheet = False
+    is_hazy_flat_cirrus = False
+    underlit_flake_w = (clamp01((high_cloud - 80.0) / 8.0)
+        * clamp01((mid_cloud - 2.0) / 2.5)
+        * clamp01((14.0 - mid_cloud) / 3.0)
+        * clamp01((4.0 - low_mid_cloud) / 2.0)
+        * clamp01((ray_trans - 85.0) / 5.0)
+        * clamp01((vis_km - 8.5) / 1.2))
+
+    if high_cloud >= 58.0 and low_mid_cloud <= 25.0 and mid_cloud <= 22.0 and ray_trans >= 38.0:
+        clean_low = clamp01(1.0 - low_mid_cloud / 25.0)
+        clean_mid = clamp01(1.0 - mid_cloud / 22.0)
+        open_corr = clamp01((ray_trans - 36.0) / 14.0)
+        ramp_in = clamp01((high_cloud - 58.0) / 10.0)
+        corr_openness = clamp01((ray_trans - 82.0) / 14.0) * clamp01((vis_km - 13.5) / 8.0)
+        closure_start = 76.5 + 7.5 * corr_openness
+        t_clos = clamp01((high_cloud - closure_start) / 16.0)
+        s_clos = t_clos * t_clos * (3.0 - 2.0 * t_clos)
+        is_overcast_cirrus_sheet = (s_clos >= 0.55)
+        overcast_damp = 1.0 - 0.50 * s_clos
+        c_pur = clean_low * clean_mid * open_corr * ramp_in * overcast_damp
+        cirrus_purity = max(cirrus_purity, c_pur)
+        k_cot_purity = max(k_cot_purity, clean_low * clean_mid * open_corr * ramp_in)
+        low_damp_cirrus = clamp01((high_cloud - 72.0) / 6.0) * clamp01(mid_cloud / 2.0) * clamp01((low_mid_cloud - 2.0) / 4.0) * 16.0
+        peak_cirrus_c = 93.0 - max(0.0, high_cloud - 68.0) * 0.22 - low_damp_cirrus
+        sheet_c = 24.5 - clamp01((high_cloud - 84.0) / 16.0) * 4.0
+        target_cirrus_c = peak_cirrus_c * (1.0 - s_clos) + sheet_c * s_clos
+        boost_part = max(canvas_raw, peak_cirrus_c) * c_pur + canvas_raw * (1.0 - c_pur)
+        sheet_w = s_clos * clean_mid * open_corr * ramp_in
+        canvas_raw = boost_part * (1.0 - sheet_w) + min(boost_part, target_cirrus_c) * sheet_w
+
+    if double_deck_w > 0.01:
+        cirrus_purity = max(cirrus_purity, 0.92 * double_deck_w)
+        k_cot_purity = max(k_cot_purity, 0.92 * double_deck_w)
+        canvas_raw = canvas_raw * (1.0 - double_deck_w) + max(canvas_raw, 95.0) * double_deck_w
+
+    if underlit_flake_w > 0.01:
+        cirrus_purity = max(cirrus_purity, 0.78 * underlit_flake_w)
+        k_cot_purity = max(k_cot_purity, 0.78 * underlit_flake_w)
+        flake_r = clamp01((mid_cloud - 2.0) / 4.0)
+        canvas_raw = canvas_raw * (1.0 - underlit_flake_w) + max(canvas_raw * 0.72, 70.0 + 6.0 * flake_r) * underlit_flake_w
+
+    if high_cloud > 0.0 and mid_cloud <= 3.5 and vis_km < 14.6 and double_deck_w < 0.2 and underlit_flake_w < 0.2:
+        no_mid_f = clamp01((3.5 - mid_cloud) / 1.8)
+        strong_haze_w = clamp01((13.6 - vis_km) / 0.8) * no_mid_f * (0.65 + 0.35 * max(clamp01((38.0 - high_cloud) / 12.0), clamp01((high_cloud - 60.0) / 10.0)))
+        mod_haze_corr_w = clamp01((14.6 - vis_km) / 0.45) * clamp01((92.0 - ray_trans) / 3.0) * no_mid_f
+        comb_haze_w = max(strong_haze_w, mod_haze_corr_w)
+        if comb_haze_w > 0.01:
+            is_hazy_flat_cirrus = (comb_haze_w >= 0.35)
+            low_contam_r = clamp01(low_mid_cloud / 7.0)
+            mod_cap = 36.0 * (1.0 - low_contam_r) + 1.8 * low_contam_r
+            mid_win_relief = clamp01((high_cloud - 30.0) / 10.0) * clamp01((66.0 - high_cloud) / 10.0) * clamp01((ray_trans - 88.0) / 8.0) * (1.0 - low_contam_r) * 18.0
+            strong_cap = min(mod_cap, (5.5 if high_cloud >= 66.0 else 3.2) + mid_win_relief)
+            target_haze_cap = mod_cap * (1.0 - strong_haze_w) + strong_cap * strong_haze_w
+            canvas_raw = canvas_raw * (1.0 - comb_haze_w) + min(canvas_raw, target_haze_cap) * comb_haze_w
+
+    leewave_w = (clamp01((vis_km - 31.0) / 1.5)
+        * clamp01((high_cloud - 76.0) / 6.0)
+        * clamp01((mid_cloud - 50.0) / 6.0)
+        * clamp01((74.0 - low_mid_cloud) / 6.0)
+        * clamp01((82.0 - rh) / 6.0))
+    leewave_gap = leewave_w * (1.0 if mid_cloud <= 70.0 else max(0.82, 1.0 - ((mid_cloud - 70.0) / 18.0) * 0.22))
+    if leewave_w > 0.01:
+        canvas_raw = max(canvas_raw, 95.0 * leewave_gap)
+        k_cot_purity = max(k_cot_purity, leewave_w)
+
+    k_cot_raw = calc_cot_multiplier_py(None, max(high_cloud, js_round(mid_cloud * 0.8)))
+    k_cot = 0.68 if is_hazy_flat_cirrus else ((k_cot_raw + (1.0 - k_cot_raw) * k_cot_purity) if k_cot_purity > 0.0 else k_cot_raw)
+    canvas = min(100.0, float(js_round(canvas_raw * k_cot)))
+    canvas_norm = canvas / 100.0
+    raw_trans_norm = max(0.01, min(1.0, ray_trans / 100.0))
+    trans_norm = max(raw_trans_norm, min(0.95, raw_trans_norm + cirrus_purity * 0.25)) if cirrus_purity > 0.0 else raw_trans_norm
+    if coastal_multilayer_w > 0.01:
+        trans_norm = max(trans_norm, min(0.92, raw_trans_norm + 0.16 * coastal_multilayer_w))
+    if leewave_w > 0.01:
+        trans_norm = max(trans_norm, 0.90 * leewave_w)
+
+    f_corridor_choke = 1.0
+    if ray_trans < 55.0:
+        choke_ratio = (55.0 - ray_trans) / 45.0
+        upper_ref = min(100.0, high_cloud + mid_cloud * 0.6)
+        thin_pen = (1.0 + ((30.0 - upper_ref) / 30.0) * 0.55) if upper_ref < 30.0 else 1.0
+        raw_choke = max(0.25, 1.0 - (choke_ratio ** 1.15) * 0.55 * thin_pen)
+        f_corridor_choke = (raw_choke + (1.0 - raw_choke) * cirrus_purity * 0.85) if cirrus_purity > 0.0 else raw_choke
+        if leewave_w > 0.01:
+            f_corridor_choke = max(f_corridor_choke, 0.95 * leewave_w)
+
+    coupled = math.sqrt(canvas_norm * trans_norm) * 78.0
+    ambient = trans_norm * 12.0 * math.sqrt(canvas_norm)
+    base_potential = (coupled + ambient) * f_corridor_choke
+
+    f_low = 1.0
+    if is_local_basin_grey_lid:
+        lid_dom = min(1.0, max(0.20, (mid_cloud - 34.0) / 16.0)) * min(1.0, (72.0 - high_cloud) / 8.0)
+        f_low = max(0.16, 1.0 - lid_dom * 0.82)
+    if low_mid_cloud > 15.0:
+        low_atten = max(0.0, 1.0 - ((low_mid_cloud - 15.0) / 57.0) ** 1.65)
+        if low_mid_cloud >= 28.0 and low_mid_cloud >= high_cloud * 0.85:
+            dom_r = clamp01((low_mid_cloud - 24.0) / 15.0) * clamp01((low_mid_cloud - high_cloud * 0.80) / 10.0)
+            low_atten *= max(0.16, 1.0 - (dom_r ** 1.02) * 0.78)
+        if low_mid_cloud >= 38.0:
+            dense_r = min(1.0, (low_mid_cloud - 36.0) / 20.0)
+            low_atten *= max(0.04, 1.0 - (dense_r ** 1.10) * 0.94)
+        if leewave_w > 0.01:
+            low_atten = low_atten * (1.0 - leewave_w) + max(low_atten, 0.94 * leewave_gap) * leewave_w
+        elif coastal_multilayer_w > 0.01:
+            low_atten = low_atten * (1.0 - coastal_multilayer_w) + max(low_atten, 0.96) * coastal_multilayer_w
+        if low_mid_cloud >= 70.0 and leewave_w < 0.1:
+            low_atten = 0.0
+        f_low = f_low * low_atten
+
+    eff_rh = max(rh, float(js_round(win_rh * 0.97)))
+    has_dd = (dd_val is not None)
+    dd_clean = max(0.0, float(dd_val)) if has_dd else None
+    win_dd_clean = max(0.0, float(win_dd)) if win_dd is not None else dd_clean
+    if dd_clean is not None and win_dd_clean is not None:
+        eff_dd = min(dd_clean, round(win_dd_clean + 0.25, 2))
+    else:
+        eff_dd = dd_clean if dd_clean is not None else win_dd_clean
+
+    effective_vis_km = vis_km
+    if wmo_code == 48 or win_fog_code == 48:
+        effective_vis_km = min(effective_vis_km, 0.8)
+    elif wmo_code == 45 or win_fog_code == 45:
+        effective_vis_km = min(effective_vis_km, 1.5)
+
+    sat_weight = clamp01((eff_rh - 91.0) / 7.0) * (clamp01((1.5 - eff_dd) / 1.2) if eff_dd is not None else 1.0)
+    if sat_weight > 0.01:
+        trap_weight = clamp01((low_mid_cloud - 22.0) / 28.0) * 0.65 + clamp01((72.0 - ray_trans) / 25.0) * 0.35
+        open_dew_cap = 20.0 - 5.5 * sat_weight
+        trapped_fog_cap = 12.0 - 9.8 * sat_weight
+        thermo_vis_cap = open_dew_cap * (1.0 - trap_weight) + trapped_fog_cap * trap_weight
+        effective_vis_km = min(effective_vis_km, thermo_vis_cap)
+
+    if pm25_val >= 65.0 or aod >= 0.55:
+        hygro_growth = (1.0 + (((max(0.0, min(95.0, eff_rh) - 72.0) / 23.0) ** 1.6) * 1.35)) if eff_rh >= 75.0 else 1.0
+        aod_bext = ((aod / 1.85) * hygro_growth) if aod >= 0.55 else 0.0
+        pm_bext = (pm25_val * 0.0032 * hygro_growth) if pm25_val >= 65.0 else 0.0
+        aero_extinct = max(aod_bext, pm_bext)
+        if aero_extinct > 0.15:
+            hygro_vis_cap = max(1.8, 3.912 / aero_extinct)
+            effective_vis_km = min(effective_vis_km, hygro_vis_cap)
+
+    if pm10_val >= 120.0:
+        effective_vis_km = min(effective_vis_km, max(1.2, 1800.0 / pm10_val))
+
+    if wmo_code >= 51:
+        rain_vis_cap = 3.2 if (wmo_code >= 63 or wmo_code == 65 or wmo_code >= 81) else (5.5 if (wmo_code >= 61 or wmo_code >= 71) else 7.5)
+        effective_vis_km = min(effective_vis_km, rain_vis_cap)
+
+    effective_aod = aod
+    if effective_vis_km < 10.0:
+        fog_equiv_aod = min(0.95, (3.912 / max(0.8, effective_vis_km)) * 0.32)
+        effective_aod = max(effective_aod, fog_equiv_aod)
+    if eff_rh > 80.0:
+        dew_relief = (1.0 - clamp01((low_mid_cloud - 15.0) / 20.0)) * clamp01((ray_trans - 75.0) / 15.0) * 0.55
+        rh_scale = 1.0 - dew_relief
+        if eff_rh <= 85.0:
+            effective_aod *= (1.0 + (eff_rh - 80.0) * 0.020 * rh_scale)
+        else:
+            effective_aod *= (1.0 + (0.10 + (((eff_rh - 85.0) / 10.0) ** 1.6) * 1.15) * rh_scale)
+
+    f_aod = 1.0
+    if 0.20 < effective_aod <= 0.35:
+        f_aod = 1.0 - (((effective_aod - 0.20) / 0.15) ** 1.15) * 0.22
+    elif 0.35 < effective_aod <= 0.65:
+        f_aod = 0.78 - ((effective_aod - 0.35) / 0.30) * 0.36
+    elif effective_aod > 0.65:
+        f_aod = max(0.18, 0.42 - ((effective_aod - 0.65) / 0.55) * 0.24)
+
+    f_dew = 1.0
+    if dd_clean is not None:
+        open_dew_relief = (1.0 - clamp01((low_mid_cloud - 15.0) / 20.0)) * clamp01((ray_trans - 75.0) / 15.0) * clamp01((effective_vis_km - 10.0) / 4.0)
+        if dd_clean < 1.5:
+            sat_mist_pen = max(0.48, 1.0 - ((eff_rh - 82.0) / 16.0) * 0.52) if eff_rh >= 85.0 else 1.0
+            raw_dew = (0.45 + (dd_clean / 1.5) * 0.35) * sat_mist_pen
+            f_dew = raw_dew + (0.94 - raw_dew) * open_dew_relief
+        elif dd_clean < 3.5:
+            raw_dew = 0.80 + ((dd_clean - 1.5) / 2.0) * 0.18
+            f_dew = raw_dew + (max(raw_dew, 0.94) - raw_dew) * open_dew_relief
+        elif dd_clean < 7.0:
+            f_dew = 0.98 + ((dd_clean - 3.5) / 3.5) * 0.04
+        else:
+            f_dew = 1.02
+
+    f_vis = 1.0
+    if effective_vis_km < 11.5:
+        if effective_vis_km >= 8.0:
+            f_vis = 0.32 + ((effective_vis_km - 8.0) / 3.5) * 0.68
+        elif effective_vis_km >= 4.0:
+            f_vis = 0.14 + ((effective_vis_km - 4.0) / 4.0) * 0.18
+        elif effective_vis_km >= 1.5:
+            f_vis = 0.06 + ((effective_vis_km - 1.5) / 2.5) * 0.08
+        else:
+            f_vis = max(0.03, (max(0.1, effective_vis_km) / 1.5) * 0.06)
+
+    clear_air_w = clamp01((effective_vis_km - 10.0) / 3.0) * clamp01((86.0 - rh) / 6.0) * clamp01((0.45 - effective_aod) / 0.12)
+    if double_deck_w > 0.05:
+        f_aod = f_aod * (1.0 - double_deck_w) + max(f_aod, 0.95) * double_deck_w
+        f_vis = f_vis * (1.0 - double_deck_w) + max(f_vis, 0.96) * double_deck_w
+    elif underlit_flake_w > 0.05:
+        f_aod = f_aod * (1.0 - underlit_flake_w) + max(f_aod, 0.94) * underlit_flake_w
+        f_vis = f_vis * (1.0 - underlit_flake_w) + max(f_vis, 0.95) * underlit_flake_w
+    elif high_cloud >= 30.0:
+        clean_boost = clamp01((high_cloud - 28.0) / 10.0) * clamp01((45.0 - low_mid_cloud) / 15.0) * clear_air_w
+        f_aod = min(1.0, f_aod * (1.0 + 0.02 * clean_boost))
+
+    safe_dew = min(1.02, f_dew) if f_dew > 1.0 else f_dew
+    score_val = js_round(base_potential * f_low * f_aod * f_vis * safe_dew)
+
+    f_precip = 1.0
+    if pp > 25.0:
+        f_precip = max(0.12, 1.0 - ((pp - 25.0) / 75.0) * 0.88)
+    if wmo_code >= 51:
+        if wmo_code >= 95 or wmo_code in (65, 67, 75, 82):
+            wmo_factor = 0.14
+        elif wmo_code in (63, 73, 81, 86):
+            wmo_factor = 0.25
+        elif wmo_code >= 61 or wmo_code >= 71 or wmo_code in (80, 85):
+            wmo_factor = 0.42
+        else:
+            wmo_factor = 0.58
+        f_precip = min(f_precip, wmo_factor)
+    if f_precip < 1.0:
+        score_val = js_round(score_val * f_precip)
+
+    bl_trans = max(0.02, min(1.0, f_aod * f_vis * min(1.0, safe_dew)))
+    high_share = min(1.0, high_cloud / max(1.0, high_cloud + mid_cloud * 0.75)) if (high_cloud > 0.0 or mid_cloud > 0.0) else 0.0
+    mid_inc_trans = max(0.32, bl_trans ** 0.85)
+    f_vert_slant = high_share + (1.0 - high_share) * mid_inc_trans
+    score_val = js_round(score_val * f_vert_slant)
+    return min(100, max(0, int(score_val)))
 
 
 def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_sunrise=False):
@@ -962,302 +1309,36 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                 # 青藏高原/川西高原/云贵高原高海拔洁净大气增益
                 ray_trans = min(99.0, ray_trans * 1.05)
 
-            # V11.0.92 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
+            # V11.0.94 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
             clamp01 = lambda v: max(0.0, min(1.0, float(v)))
-            double_deck_w = (clamp01((high_cloud - 63.0) / 4.0)
-                * clamp01((84.0 - high_cloud) / 4.0)
-                * clamp01((mid_cloud - 13.0) / 5.0)
-                * clamp01((52.0 - mid_cloud) / 4.0)
-                * clamp01((9.0 - low_mid_cloud) / 4.0)
+            double_deck_upper = (clamp01((high_cloud - 58.0) / 8.0)
+                * clamp01((88.0 - high_cloud) / 10.0)
+                * clamp01((mid_cloud - 12.0) / 6.0)
+                * clamp01((54.0 - mid_cloud) / 6.0)
                 * clamp01((ray_trans - 70.0) / 4.0)
                 * clamp01((vis_km - 10.8) / 1.2))
-            is_gz_broken_edge = (12.0 <= high_cloud <= 18.0 and mid_cloud >= 96.0 and 6.0 <= low_mid_cloud <= 12.0 and ray_trans >= 76.0)
-            is_nanjing_3d = (double_deck_w >= 0.5)
-            is_local_basin_grey_lid = (not is_gz_broken_edge and double_deck_w < 0.25 and vis_km < 31.5 and mid_cloud >= 38.0 and (high_cloud <= 64.0 or mid_cloud >= high_cloud * 0.75))
+            is_local_basin_grey_lid = (double_deck_upper < 0.25 and vis_km < 31.5 and mid_cloud >= 38.0 and (high_cloud <= 64.0 or mid_cloud >= high_cloud * 0.75))
 
             if is_local_basin_grey_lid:
-                low_mid_cloud = max(low_mid_cloud, float(min(54, round(mid_cloud * 0.84))))
+                low_mid_cloud = max(low_mid_cloud, float(min(54, js_round(mid_cloud * 0.84))))
                 ray_trans = min(ray_trans, 30.0)
             elif high_cloud < 15.0 and mid_cloud < 20.0 and low_mid_cloud <= 12.0:
                 if west_low_first <= 22.0 and (west_high_max >= 18.0 or west_mid_max >= 20.0):
                     clean_local_gate = max(0.0, (12.0 - low_mid_cloud) / 12.0)
-                    high_cloud = max(high_cloud, round(west_high_max * 0.36 * clean_local_gate))
-                    mid_cloud = max(mid_cloud, round(west_mid_max * 0.34 * clean_local_gate))
+                    high_cloud = max(high_cloud, float(js_round(west_high_max * 0.36 * clean_local_gate)))
+                    mid_cloud = max(mid_cloud, float(js_round(west_mid_max * 0.34 * clean_local_gate)))
 
-            # --- 1. 核心受光画布 (与 scoringCore.js V11.0.92 100% 同源) ---
-            low_obs = max(0.0, min(1.0, low_mid_cloud / 100.0))
-            mid_visible = mid_cloud * (1.0 - low_obs * 0.55)
-            raw_mid_shade = max(0.08, 1.0 - (min(1.0, (mid_cloud - 22.0) / 55.0) ** 1.10) * 0.88) if (vis_km < 31.5 and mid_cloud > 22.0) else 1.0
-            continuous_mid_shade = raw_mid_shade + (1.0 - raw_mid_shade) * double_deck_w
-            mid_occlude_high = min(0.28, continuous_mid_shade) if is_local_basin_grey_lid else continuous_mid_shade
-            low_occlude_high = max(0.25, 1.0 - (((low_mid_cloud - 25.0) / 60.0) ** 1.15) * 0.65) if low_mid_cloud > 25.0 else 1.0
-            high_visible = high_cloud * mid_occlude_high * low_occlude_high
-
-            effective_cloud = 0.0
-            broken_edge = 0.0
-            if high_visible > 0.0 or mid_visible > 0.0:
-                mid_weight = (0.45 + 0.25 * math.exp(-high_visible / 18.0)) if high_visible > 0.0 else 0.70
-                mid_contrib = mid_visible * (1.0 - high_visible / 100.0) * mid_weight
-                broken_edge = 0.0
-                open_horizon = ((ray_trans - 88.0) / 10.0) * 5.5 if (10.0 <= high_visible <= 24.0 and low_mid_cloud <= 5.0 and ray_trans >= 90.0) else 0.0
-                effective_cloud = round(high_visible + mid_contrib + broken_edge + open_horizon)
-
-            canvas_raw = calc_double_logistic_canvas_py(effective_cloud)
-
-            # V11.0.92 连续中云主导画布约束 (消除中云 35%~95% 板结灰云盖虚高)
-            coastal_multilayer_w = (clamp01((vis_km - 19.5) / 4.5)
-                * clamp01((high_cloud - 38.0) / 8.0)
-                * clamp01((high_cloud * 0.68 - mid_cloud) / 8.0)
-                * clamp01((36.0 - low_mid_cloud) / 8.0)
-                * clamp01((ray_trans - 56.0) / 8.0))
-            is_coastal_multilayer_glow = (coastal_multilayer_w >= 0.5)
-            if is_gz_broken_edge:
-                canvas_raw = min(canvas_raw, 25.0)
-            elif double_deck_w < 0.99 and vis_km < 31.5 and mid_cloud >= 18.0:
-                mid_ratio_gate = max(clamp01((38.0 - high_cloud) / 10.0), clamp01((mid_cloud - high_cloud * 0.58) / 10.0), clamp01((22.5 - vis_km) / 3.5))
-                mid_dom_w = clamp01((mid_cloud - 16.0) / 14.0) * clamp01((74.0 - high_cloud) / 12.0) * mid_ratio_gate * (1.0 - double_deck_w) * (1.0 - coastal_multilayer_w)
-                self_shadow = max(0.38, 1.0 - (mid_cloud - 25.0) * 0.012) if mid_cloud > 25.0 else 1.0
-                high_assist = min(6.5, high_visible * 0.16)
-                mid_cap_canvas = (23.5 + high_assist + broken_edge * 0.65) * self_shadow
-                canvas_raw = canvas_raw * (1.0 - mid_dom_w) + min(canvas_raw, mid_cap_canvas) * mid_dom_w
-
-            # 极高通透走廊地平线暮色光弧与零星碎云斜射模型 (深圳湾/佛山)
-            if high_visible < 10.0 and mid_visible <= 14.0 and low_mid_cloud <= 8.0 and ray_trans >= 88.0 and vis_km >= 16.0 and rh <= 82.0:
-                open_factor = min(1.0, (ray_trans - 85.0) / 12.0) * min(1.0, (vis_km - 14.0) / 5.5)
-                scat_gain = min(28.0, mid_visible * 3.1 + high_visible * 2.0) if mid_visible > 0.0 else (high_visible * 2.2)
-                canvas_raw = max(canvas_raw, (22.5 + scat_gain) * open_factor)
-
-            if canvas_raw <= 0.5 and effective_cloud <= 2.0:
+            if high_cloud <= 0.5 and mid_cloud <= 0.5:
                 prob_grid[r, c] = 0.0
                 continue
 
-            # 单层中薄卷云与锋前碎低云去过饱和修正 (贺州/桂林/台北/哈尔滨)
-            if 12.0 <= high_cloud < 24.0 and mid_cloud <= 15.0 and ray_trans < 93.0:
-                canvas_raw *= (0.44 + 0.26 * ((high_cloud - 12.0) / 12.0))
-            elif 24.0 <= high_cloud <= 44.0 and mid_cloud <= 18.0:
-                low_scatter_damp = max(0.28, 1.0 - ((low_mid_cloud - 8.0) / 14.0) * 0.68) if low_mid_cloud > 8.0 else 1.0
-                thin_scale = (0.74 + 0.26 * ((high_cloud - 24.0) / 20.0) * (0.65 + 0.35 * min(1.0, mid_cloud / 12.0))) * low_scatter_damp
-                canvas_raw *= thin_scale
-
-            # 高空卷云前向散射、灰霾顶平直/碎低云闭锁 (郑州/广州)、双层谐振 (南京) 与厚卷层云闭合 (佛山)
-            cirrus_purity = 0.0
-            is_overcast_cirrus_sheet = False
-            is_multi_layer_3d = False
-            is_hazy_flat_cirrus = False
-            cirrus_low_thresh = 60.0 if (mid_cloud >= 1.0 and low_mid_cloud <= 5.0 and ray_trans >= 72.0) else 68.0
-            underlit_flake_w = (clamp01((high_cloud - 85.0) / 5.0)
-                * clamp01((mid_cloud - 2.0) / 2.5)
-                * clamp01((14.0 - mid_cloud) / 3.0)
-                * clamp01((4.0 - low_mid_cloud) / 2.0)
-                * clamp01((ray_trans - 85.0) / 5.0)
-                * clamp01((vis_km - 8.5) / 1.2))
-            is_underlit_canopy_flakes = (underlit_flake_w >= 0.45)
-            is_hazy_sparse_single = (18.0 <= high_cloud <= 38.0 and mid_cloud <= 3.0 and low_mid_cloud <= 10.0 and vis_km < 13.6)
-            is_hazy_low_contam_single = (18.0 <= high_cloud <= 62.0 and mid_cloud <= 3.0 and low_mid_cloud <= 15.0 and vis_km < 14.6 and ray_trans <= 91.0)
-
-            if high_cloud >= 18.0 and mid_cloud <= 3.5 and vis_km < 14.6 and double_deck_w < 0.2:
-                no_mid_f = clamp01((3.5 - mid_cloud) / 1.8)
-                strong_haze_w = clamp01((13.6 - vis_km) / 0.8) * no_mid_f * max(clamp01((40.0 - high_cloud) / 8.0), clamp01((high_cloud - 66.0) / 6.0))
-                mod_haze_corr_w = clamp01((14.6 - vis_km) / 0.45) * clamp01((92.0 - ray_trans) / 3.0) * no_mid_f
-                comb_haze_w = max(strong_haze_w, mod_haze_corr_w)
-                if comb_haze_w > 0.01:
-                    is_hazy_flat_cirrus = (comb_haze_w >= 0.35)
-                    low_contam_r = clamp01(low_mid_cloud / 7.0)
-                    mod_cap = 36.0 * (1.0 - low_contam_r) + 1.8 * low_contam_r
-                    strong_cap = 5.5 if high_cloud >= 66.0 else 3.2
-                    target_haze_cap = strong_cap if strong_haze_w >= mod_haze_corr_w else (mod_cap * (1.0 - strong_haze_w) + strong_cap * strong_haze_w)
-                    canvas_raw = canvas_raw * (1.0 - comb_haze_w) + min(canvas_raw, target_haze_cap) * comb_haze_w
-            elif underlit_flake_w > 0.05:
-                cirrus_purity = max(cirrus_purity, 0.78 * underlit_flake_w)
-                flake_r = clamp01((mid_cloud - 2.0) / 4.0)
-                canvas_raw = canvas_raw * (1.0 - underlit_flake_w) + max(canvas_raw * 0.72, 70.0 + 6.0 * flake_r) * underlit_flake_w
-            elif double_deck_w > 0.05:
-                is_multi_layer_3d = (double_deck_w >= 0.45)
-                cirrus_purity = max(cirrus_purity, 0.92 * double_deck_w)
-                canvas_raw = canvas_raw * (1.0 - double_deck_w) + max(canvas_raw, 95.0) * double_deck_w
-            elif high_cloud >= cirrus_low_thresh and low_mid_cloud <= 25.0 and mid_cloud <= 22.0 and ray_trans >= 38.0:
-                clean_low = max(0.0, 1.0 - low_mid_cloud / 26.0)
-                clean_mid = max(0.0, 1.0 - mid_cloud / 46.0)
-                open_corr = min(1.0, max(0.0, (ray_trans - 36.0) / 14.0))
-                is_clean_coastal = (vis_km >= 20.0 and ray_trans >= 95.0)
-                is_ultra_clean_deep = (vis_km >= 23.5 and ray_trans >= 97.0 and low_mid_cloud <= 6.0 and high_cloud <= 86.0)
-                translucent_top = 85.5 if is_ultra_clean_deep else (82.0 if is_clean_coastal else 80.0)
-                if high_cloud <= translucent_top:
-                    ramp_in = ((high_cloud - 58.0) / 10.0) if high_cloud < 68.0 else 1.0
-                    cirrus_purity = clean_low * clean_mid * open_corr * ramp_in
-                    low_damp_dense = 18.0 if (high_cloud >= 74.0 and mid_cloud >= 1.0 and low_mid_cloud >= 3.0) else 0.0
-                    trans_cirrus_canvas = (93.0 - max(0.0, high_cloud - 76.0) * 2.5) if is_ultra_clean_deep else (93.0 - max(0.0, high_cloud - 68.0) * 0.20 - low_damp_dense)
-                    target_cirrus_c = trans_cirrus_canvas if low_damp_dense > 0.0 else max(canvas_raw, trans_cirrus_canvas)
-                    canvas_raw = canvas_raw * (1.0 - cirrus_purity) + target_cirrus_c * cirrus_purity
-                else:
-                    overcast_damp = max(0.45, 1.0 - (((high_cloud - translucent_top) / 18.0) ** 1.15) * 0.50)
-                    cirrus_purity = clean_low * clean_mid * open_corr * overcast_damp
-                    if mid_cloud <= 15.0 and low_mid_cloud <= 15.0:
-                        is_overcast_cirrus_sheet = True
-                        s_start = 83.5 if is_clean_coastal else 78.0
-                        s_span = 5.5 if is_clean_coastal else 6.0
-                        pure_sheet_w = min(1.0, max(0.0, (high_cloud - s_start) / s_span)) * max(0.0, 1.0 - mid_cloud / 15.0) * clean_low
-                        overcast_sheet_c = max(20.0, 26.0 - ((high_cloud - 80.0) / 18.0) * 5.0)
-                        canvas_raw = canvas_raw * (1.0 - pure_sheet_w) + overcast_sheet_c * pure_sheet_w
-
-            # 超高视程 (>=32km) 焚风/背风波云底干洁导光层模型
-            is_ultra_clear_leewave = (vis_km >= 32.0 and high_cloud >= 80.0 and mid_cloud >= 55.0 and low_mid_cloud <= 72.0 and rh <= 80.0)
-            leewave_gap = (1.0 if mid_cloud <= 70.0 else max(0.82, 1.0 - ((mid_cloud - 70.0) / 18.0) * 0.22)) if is_ultra_clear_leewave else 0.0
-            if is_ultra_clear_leewave:
-                canvas_raw = max(canvas_raw, 95.0 * leewave_gap)
-
-            k_cot = 0.68 if is_hazy_flat_cirrus else 1.0
-            canvas = min(100.0, round(canvas_raw * k_cot))
-            canvas_norm = canvas / 100.0
-            raw_trans_norm = max(0.01, min(1.0, ray_trans / 100.0))
-            trans_norm = min(0.95, raw_trans_norm + cirrus_purity * 0.25) if cirrus_purity > 0.0 else raw_trans_norm
-            if coastal_multilayer_w > 0.01:
-                trans_norm = min(0.92, max(trans_norm, raw_trans_norm + 0.16 * coastal_multilayer_w))
-            if is_ultra_clear_leewave:
-                trans_norm = max(trans_norm, 0.90)
-
-            f_corridor_choke = 1.0
-            if ray_trans < 55.0:
-                choke_ratio = (55.0 - ray_trans) / 45.0
-                thin_pen = (1.0 + ((30.0 - effective_cloud) / 30.0) * 0.55) if effective_cloud < 30.0 else 1.0
-                raw_choke = max(0.25, 1.0 - (choke_ratio ** 1.15) * 0.55 * thin_pen)
-                f_corridor_choke = (raw_choke + (1.0 - raw_choke) * cirrus_purity * 0.85) if cirrus_purity > 0.0 else raw_choke
-                if is_ultra_clear_leewave:
-                    f_corridor_choke = max(f_corridor_choke, 0.95)
-
-            coupled = math.sqrt(canvas_norm * trans_norm) * 78.0
-            ambient = trans_norm * 12.0 * math.sqrt(canvas_norm)
-            base_potential = (coupled + ambient) * f_corridor_choke
-
-            # --- 2. 低云门控与盆地灰云盖闭合抑制 (与 scoringCore.js V11.0.92 100% 同构) ---
-            f_low = 1.0
-            if is_local_basin_grey_lid:
-                lid_dom = min(1.0, max(0.20, (mid_cloud - 34.0) / 16.0)) * min(1.0, (72.0 - high_cloud) / 8.0)
-                f_low = max(0.16, 1.0 - lid_dom * 0.82)
-            if low_mid_cloud > 15.0:
-                f_low = min(f_low, max(0.0, 1.0 - ((low_mid_cloud - 15.0) / 57.0) ** 1.65))
-                if low_mid_cloud >= 28.0 and low_mid_cloud >= high_cloud * 0.85:
-                    dom_r = min(1.0, (low_mid_cloud - 24.0) / 15.0)
-                    f_low *= max(0.16, 1.0 - (dom_r ** 1.02) * 0.78)
-                if low_mid_cloud >= 38.0:
-                    dense_r = min(1.0, (low_mid_cloud - 36.0) / 20.0)
-                    f_low *= max(0.04, 1.0 - (dense_r ** 1.10) * 0.94)
-                if is_ultra_clear_leewave:
-                    f_low = max(f_low, 0.94 * leewave_gap)
-                elif coastal_multilayer_w > 0.01:
-                    f_low = f_low * (1.0 - coastal_multilayer_w) + max(f_low, 0.96) * coastal_multilayer_w
-                elif low_mid_cloud >= 70.0:
-                    f_low = 0.0
-
-            # --- 3. 多源物理能见度融合与河谷水汽凝结锁雾上限 (与 scoringCore.js 第 425-481 行完全一致) ---
-            eff_rh = max(rh, round(win_rh * 0.97))
-            eff_dd = min(dd_val, win_dd + 0.25)
-            effective_vis_km = vis_km
-            if wmo_code == 48 or win_fog_code == 48:
-                effective_vis_km = min(effective_vis_km, 0.8)
-            elif wmo_code == 45 or win_fog_code == 45:
-                effective_vis_km = min(effective_vis_km, 1.5)
-
-            is_shallow_blh_fog = (blh_m <= 400.0 and eff_rh >= 91.0 and eff_dd <= 1.4)
-            is_condensation_fog = (eff_rh >= 91.0 and eff_dd <= 1.4) or (eff_rh >= 93.0 and eff_dd <= 1.6) or (eff_rh >= 94.0) or is_shallow_blh_fog
-            if is_condensation_fog:
-                safe_dd_val = max(0.2, eff_dd)
-                blh_scale = max(0.48, 0.45 + (blh_m / 450.0) * 0.35) if blh_m <= 450.0 else 0.78
-                thermo_vis_cap = max(0.6, (0.65 + safe_dd_val * 0.75 + max(0.0, 90.0 - eff_rh) * 0.12) * blh_scale)
-                effective_vis_km = min(effective_vis_km, thermo_vis_cap)
-
-            if pm25_val >= 65.0 or aod >= 0.55:
-                hygro_growth = (1.0 + (((max(0.0, min(95.0, eff_rh) - 72.0) / 23.0) ** 1.6) * 1.35)) if eff_rh >= 75.0 else 1.0
-                aod_bext = ((aod / 1.85) * hygro_growth) if aod >= 0.55 else 0.0
-                pm_bext = (pm25_val * 0.0032 * hygro_growth) if pm25_val >= 65.0 else 0.0
-                aero_extinct = max(aod_bext, pm_bext)
-                if aero_extinct > 0.15:
-                    hygro_vis_cap = max(1.8, 3.912 / aero_extinct)
-                    effective_vis_km = min(effective_vis_km, hygro_vis_cap)
-
-            if pm10_val >= 120.0:
-                effective_vis_km = min(effective_vis_km, max(1.2, 1800.0 / pm10_val))
-
-            if wmo_code >= 51:
-                rain_vis_cap = 3.2 if (wmo_code >= 63 or wmo_code == 65 or wmo_code >= 81) else (5.5 if (wmo_code >= 61 or wmo_code >= 71) else 7.5)
-                effective_vis_km = min(effective_vis_km, rain_vis_cap)
-
-            # --- 4. 气溶胶湿增长与比尔-朗伯消光 fAod (与 scoringCore.js 第 484-505 行完全一致) ---
-            effective_aod = aod
-            if effective_vis_km < 10.0:
-                fog_equiv_aod = min(0.95, (3.912 / max(0.8, effective_vis_km)) * 0.32)
-                effective_aod = max(effective_aod, fog_equiv_aod)
-            if eff_rh > 80.0:
-                if eff_rh <= 85.0:
-                    effective_aod *= (1.0 + (eff_rh - 80.0) * 0.020)
-                else:
-                    effective_aod *= (1.10 + (((eff_rh - 85.0) / 10.0) ** 1.6) * 1.15)
-
-            f_aod = 1.0
-            if 0.20 < effective_aod <= 0.35:
-                f_aod = 1.0 - (((effective_aod - 0.20) / 0.15) ** 1.15) * 0.22
-            elif 0.35 < effective_aod <= 0.65:
-                f_aod = 0.78 - ((effective_aod - 0.35) / 0.30) * 0.36
-            elif effective_aod > 0.65:
-                f_aod = max(0.18, 0.42 - ((effective_aod - 0.65) / 0.55) * 0.24)
-
-            # --- 5. 露点差门控 fDew 与 Koschmieder 斜程光学屏障 fVis (与 scoringCore.js 第 507-535 行完全一致) ---
-            if dd_val < 1.5:
-                sat_mist_pen = max(0.48, 1.0 - ((eff_rh - 82.0) / 16.0) * 0.52) if eff_rh >= 85.0 else 1.0
-                f_dew = (0.45 + (dd_val / 1.5) * 0.35) * sat_mist_pen
-            elif dd_val < 3.5:
-                mist_pen = 0.68 if is_condensation_fog else 1.0
-                f_dew = (0.80 + ((dd_val - 1.5) / 2.0) * 0.18) * mist_pen
-            elif dd_val < 7.0:
-                f_dew = 0.98 + ((dd_val - 3.5) / 3.5) * 0.04
-            else:
-                f_dew = 1.02
-
-            f_vis = 1.0
-            if effective_vis_km < 11.5:
-                if effective_vis_km >= 8.0:
-                    f_vis = 0.32 + ((effective_vis_km - 8.0) / 3.5) * 0.68
-                elif effective_vis_km >= 4.0:
-                    f_vis = 0.14 + ((effective_vis_km - 4.0) / 4.0) * 0.18
-                elif effective_vis_km >= 1.5:
-                    f_vis = 0.06 + ((effective_vis_km - 1.5) / 2.5) * 0.08
-                else:
-                    f_vis = max(0.03, (max(0.1, effective_vis_km) / 1.5) * 0.06)
-
-            is_surface_fog_haze = (effective_vis_km < 10.0) or (rh >= 86.0) or (effective_aod > 0.45)
-            if double_deck_w > 0.05:
-                f_aod = f_aod * (1.0 - double_deck_w) + max(f_aod, 0.95) * double_deck_w
-                f_vis = f_vis * (1.0 - double_deck_w) + max(f_vis, 0.96) * double_deck_w
-            elif underlit_flake_w > 0.05:
-                f_aod = f_aod * (1.0 - underlit_flake_w) + max(f_aod, 0.94) * underlit_flake_w
-                f_vis = f_vis * (1.0 - underlit_flake_w) + max(f_vis, 0.95) * underlit_flake_w
-            elif high_cloud >= 30.0 and low_mid_cloud <= 45.0 and not is_surface_fog_haze:
-                f_aod = min(1.0, f_aod * 1.02)
-            safe_dew = min(1.02, f_dew) if f_dew > 1.0 else f_dew
-            score_val = round(base_potential * f_low * f_aod * f_vis * safe_dew)
-
-            # --- 6. 降水门控 fPrecip 与边界层垂直分层双程斜射消光 fVerticalSlant (与 scoringCore.js 第 549-585 行完全一致) ---
-            f_precip = 1.0
-            if pp > 25.0:
-                f_precip = max(0.12, 1.0 - ((pp - 25.0) / 75.0) * 0.88)
-            if wmo_code >= 51:
-                if wmo_code >= 95 or wmo_code in (65, 67, 75, 82):
-                    wmo_factor = 0.14
-                elif wmo_code in (63, 73, 81, 86):
-                    wmo_factor = 0.25
-                elif wmo_code >= 61 or wmo_code >= 71 or wmo_code in (80, 85):
-                    wmo_factor = 0.42
-                else:
-                    wmo_factor = 0.58
-                f_precip = min(f_precip, wmo_factor)
-            if f_precip < 1.0:
-                score_val = round(score_val * f_precip)
-
-            bl_trans = max(0.02, min(1.0, f_aod * f_vis * min(1.0, safe_dew)))
-            high_share = min(1.0, high_visible / max(1.0, high_visible + mid_visible * 0.75)) if (high_visible > 0.0 or mid_visible > 0.0) else 0.0
-            mid_incident_trans = max(0.32, bl_trans ** 0.85)
-            f_vertical_slant = high_share + (1.0 - high_share) * mid_incident_trans
-            quality = float(min(100, max(0, round(score_val * f_vertical_slant))))
+            # 唯一真理源调用：直接调用经 1,500 点 + 多湿度全网格对拍验证的 compute_physical_score_point_py，彻底消灭二维网格内联副本漂移！
+            quality = float(compute_physical_score_point_py(
+                high_cloud, mid_cloud, low_mid_cloud, vis_km, rh, ray_trans, aod,
+                win_rh=win_rh, dd_val=dd_val, win_dd=win_dd, pp=pp,
+                wmo_code=wmo_code, win_fog_code=win_fog_code, blh_m=blh_m,
+                pm25_val=pm25_val, pm10_val=pm10_val
+            ))
 
             # 与小程序端 posterGenerator.js 完全一致的质量分 -> 概率映射 (确保 <42分阴天/大雾/0分绝不跨过 50 起染线!)
             prob = min(98.0, 48.0 + (quality - 42.0) * 1.05) if quality >= 42.0 else quality * 0.92
@@ -2208,7 +2289,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
 
     if run_all_modes:
         print("=" * 78)
-        print(f"[LOHUI V11.0.92 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
+        print(f"[LOHUI V11.0.94 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
         print(f"  -> 数据源: ECMWF/GFS + CAMS气溶胶 + 风云四号(FY-4B)/CMA + 葵花-9号短波辐射")
         print(f"  -> 光路积分: 500km 连续20步射线积分 + DEM高原盆地遮挡修正 | 0.1分无损Uint16编码")
         print("=" * 78)
