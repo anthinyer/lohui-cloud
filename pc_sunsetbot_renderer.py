@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 r"""
 ===============================================================================
-LOHUI V11.0.96 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
+LOHUI V11.0.97 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
 
 核心特性 (对标莉景天气 / Sunsetbot C1 专业版 4:3 无拉伸火烧云地图规范):
 1. 严格锁定 1/cos(35°) 真实地理纵横比 (4:3 标准横幅 2640x1980)，彻底消除中国版图纵向拉伸变形;
@@ -809,7 +809,7 @@ def js_round(val):
 
 
 def compute_physical_score_point_py(high_cloud, mid_cloud, low_mid_cloud, vis_km, rh, ray_trans, aod, win_rh=None, dd_val=None, win_dd=None, pp=0.0, wmo_code=0, win_fog_code=0, blh_m=600.0, pm25_val=22.0, pm10_val=35.0):
-    """单点核心物理算分函数 (V11.0.96 与小程序端 scoringCore.js computePhysicalScore 100% 逐字数学同构，全网格分差 0.0)"""
+    """单点核心物理算分函数 (V11.0.97 与小程序端 scoringCore.js computePhysicalScore 100% 逐字数学同构，全网格分差 0.0)"""
     high_cloud = float(high_cloud)
     mid_cloud = float(mid_cloud)
     low_mid_cloud = float(low_mid_cloud)
@@ -1311,7 +1311,7 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                 # 青藏高原/川西高原/云贵高原高海拔洁净大气增益
                 ray_trans = min(99.0, ray_trans * 1.05)
 
-            # V11.0.96 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
+            # V11.0.97 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
             clamp01 = lambda v: max(0.0, min(1.0, float(v)))
             double_deck_upper = (clamp01((high_cloud - 58.0) / 8.0)
                 * clamp01((88.0 - high_cloud) / 10.0)
@@ -2337,7 +2337,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
 
     if run_all_modes:
         print("=" * 78)
-        print(f"[LOHUI V11.0.96 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
+        print(f"[LOHUI V11.0.97 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
         print(f"  -> 数据源: ECMWF/GFS + CAMS气溶胶 + 风云四号(FY-4B)/CMA + 葵花-9号短波辐射")
         print(f"  -> 光路积分: 500km 连续20步射线积分 + DEM高原盆地遮挡修正 | 0.1分无损Uint16编码")
         print("=" * 78)
