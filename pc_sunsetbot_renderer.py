@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 r"""
 ===============================================================================
-LOHUI V11.0.95 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
+LOHUI V11.0.96 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
 
 核心特性 (对标莉景天气 / Sunsetbot C1 专业版 4:3 无拉伸火烧云地图规范):
 1. 严格锁定 1/cos(35°) 真实地理纵横比 (4:3 标准横幅 2640x1980)，彻底消除中国版图纵向拉伸变形;
@@ -809,7 +809,7 @@ def js_round(val):
 
 
 def compute_physical_score_point_py(high_cloud, mid_cloud, low_mid_cloud, vis_km, rh, ray_trans, aod, win_rh=None, dd_val=None, win_dd=None, pp=0.0, wmo_code=0, win_fog_code=0, blh_m=600.0, pm25_val=22.0, pm10_val=35.0):
-    """单点核心物理算分函数 (V11.0.95 与小程序端 scoringCore.js computePhysicalScore 100% 逐字数学同构，全网格分差 0.0)"""
+    """单点核心物理算分函数 (V11.0.96 与小程序端 scoringCore.js computePhysicalScore 100% 逐字数学同构，全网格分差 0.0)"""
     high_cloud = float(high_cloud)
     mid_cloud = float(mid_cloud)
     low_mid_cloud = float(low_mid_cloud)
@@ -1243,6 +1243,8 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
     u_east = math.sin(az_rad)
 
     prob_grid = np.zeros((rows, cols), dtype=np.float32)
+    q_grid = np.zeros((rows, cols), dtype=np.float32)
+    rt_grid = np.full((rows, cols), 75.0, dtype=np.float32)
     # 升级为 500km 连续射线步进光路积分 (Ray-Marching: 每隔 25km 一步，共 20 个连续光路采样断面，覆盖 25km ~ 500km 完整天际线!)
     ray_dists_km = [float(d) for d in range(15, 501, 20)]
     raw_exp_w = [math.exp(-d / 185.0) for d in ray_dists_km]
@@ -1309,7 +1311,7 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                 # 青藏高原/川西高原/云贵高原高海拔洁净大气增益
                 ray_trans = min(99.0, ray_trans * 1.05)
 
-            # V11.0.95 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
+            # V11.0.96 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
             clamp01 = lambda v: max(0.0, min(1.0, float(v)))
             double_deck_upper = (clamp01((high_cloud - 58.0) / 8.0)
                 * clamp01((88.0 - high_cloud) / 10.0)
@@ -1340,6 +1342,8 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                 pm25_val=pm25_val, pm10_val=pm10_val
             ))
 
+            q_grid[r, c] = quality
+            rt_grid[r, c] = ray_trans
             # 与小程序端 posterGenerator.js 完全一致的质量分 -> 概率映射 (确保 <42分阴天/大雾/0分绝不跨过 50 起染线!)
             prob = min(98.0, 48.0 + (quality - 42.0) * 1.05) if quality >= 42.0 else quality * 0.92
             prob_grid[r, c] = prob
@@ -1352,6 +1356,12 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
     low_mask = (raw_unfiltered <= 25.0) & land_mask
     prob_grid[low_mask] = np.minimum(prob_grid[low_mask], raw_unfiltered[low_mask] + 5.0)
     prob_grid[~land_mask] = 0.0
+    global _LAST_2D_METEO_FIELDS
+    _LAST_2D_METEO_FIELDS = {
+        "q": q_grid, "hc": hc_grid, "mc": mc_grid, "lc": lc_grid,
+        "vis": vis_grid, "rh": rh_grid, "rt": rt_grid, "aod": aod_grid,
+        "dd": dd_grid, "pp": pp_grid, "wmo": wmo_grid, "pm25": pm25_grid
+    }
     return prob_grid
 
 
@@ -1395,6 +1405,12 @@ def _lookup_gitee_file_sha(owner, repo, path, token, headers, ssl_ctx):
 
 
 
+_LAST_2D_METEO_FIELDS = {}
+
+def _bilerp_2d(grid_arr, r0, r1, c0, c1, fu, fv):
+    return (1.0 - fu) * ((1.0 - fv) * float(grid_arr[r0, c0]) + fv * float(grid_arr[r0, c1])) + \
+           fu * ((1.0 - fv) * float(grid_arr[r1, c0]) + fv * float(grid_arr[r1, c1]))
+
 def extract_337_cities_compact_ranking(prob_grid, lats, lons):
     """从 144x248 四源高精连续光路场中精确提取全国 337 座地级市的权威质量分，供小程序【全国榜】0秒直读"""
     rows, cols = prob_grid.shape
@@ -1409,15 +1425,46 @@ def extract_337_cities_compact_ranking(prob_grid, lats, lons):
         c0 = max(0, min(cols - 1, int(math.floor(v))))
         c1 = min(cols - 1, c0 + 1)
         fu, fv = u - r0, v - c0
-        p_val = (1.0 - fu) * ((1.0 - fv) * float(prob_grid[r0, c0]) + fv * float(prob_grid[r0, c1])) + \
-                fu * ((1.0 - fv) * float(prob_grid[r1, c0]) + fv * float(prob_grid[r1, c1]))
-        # 严格逆映射回小程序端对应的质量分 (0~100整数)
+        p_val = _bilerp_2d(prob_grid, r0, r1, c0, c1, fu, fv)
         if p_val >= 48.0:
             q_score = int(round(max(42.0, min(98.0, 42.0 + (p_val - 48.0) / 1.05))))
         else:
             q_score = int(round(max(0.0, p_val / 0.92)))
         pairs.append(f"{cname}:{q_score}")
     return ",".join(pairs)
+
+def extract_337_cities_weather_pack(prob_grid, lats, lons):
+    """提取全国 337 城四源同化气象要素快照 (q|hc|mc|lc|vis|rh|rt|aod|dd|pp|wmo|pm25)，供国内直连 Gitee 秒开主界面实况"""
+    if not _LAST_2D_METEO_FIELDS or "hc" not in _LAST_2D_METEO_FIELDS:
+        return ""
+    rows, cols = prob_grid.shape
+    lat_min, lat_max = float(lats[0]), float(lats[-1])
+    lon_min, lon_max = float(lons[0]), float(lons[-1])
+    m = _LAST_2D_METEO_FIELDS
+    items = []
+    for cname, clat, clon in ALL_337_CITIES:
+        u = ((clat - lat_min) / (lat_max - lat_min)) * (rows - 1)
+        v = ((clon - lon_min) / (lon_max - lon_min)) * (cols - 1)
+        r0 = max(0, min(rows - 1, int(math.floor(u))))
+        r1 = min(rows - 1, r0 + 1)
+        c0 = max(0, min(cols - 1, int(math.floor(v))))
+        c1 = min(cols - 1, c0 + 1)
+        fu, fv = u - r0, v - c0
+        p_val = _bilerp_2d(prob_grid, r0, r1, c0, c1, fu, fv)
+        q_sc = int(round(max(42.0, min(98.0, 42.0 + (p_val - 48.0) / 1.05)))) if p_val >= 48.0 else int(round(max(0.0, p_val / 0.92)))
+        hc = int(round(_bilerp_2d(m["hc"], r0, r1, c0, c1, fu, fv)))
+        mc = int(round(_bilerp_2d(m["mc"], r0, r1, c0, c1, fu, fv)))
+        lc = int(round(_bilerp_2d(m["lc"], r0, r1, c0, c1, fu, fv)))
+        vis = round(_bilerp_2d(m["vis"], r0, r1, c0, c1, fu, fv), 1)
+        rh = int(round(_bilerp_2d(m["rh"], r0, r1, c0, c1, fu, fv)))
+        rt = int(round(_bilerp_2d(m["rt"], r0, r1, c0, c1, fu, fv)))
+        aod = round(_bilerp_2d(m["aod"], r0, r1, c0, c1, fu, fv), 2)
+        dd = round(_bilerp_2d(m["dd"], r0, r1, c0, c1, fu, fv), 1)
+        pp = int(round(_bilerp_2d(m["pp"], r0, r1, c0, c1, fu, fv)))
+        wmo = int(round(float(m["wmo"][r0, c0])))
+        pm25 = int(round(_bilerp_2d(m["pm25"], r0, r1, c0, c1, fu, fv)))
+        items.append(f"{cname}:{q_sc}|{hc}|{mc}|{lc}|{vis}|{rh}|{rt}|{aod}|{dd}|{pp}|{wmo}|{pm25}")
+    return ",".join(items)
 
 
 def _max_city_score_from_c337(c337_str):
@@ -1488,7 +1535,7 @@ def compute_grid_hourly_diff_summary(new_grid, old_b64_token, land_mask, new_c33
     except Exception:
         return "较上期：全量四源高精光路场已实时刷新"
 
-def upload_grid_to_gitee(compact_payload, date_str, ev_type, grids_dict=None, cities_337_dict=None, diff_summaries=None):
+def upload_grid_to_gitee(compact_payload, date_str, ev_type, grids_dict=None, cities_337_dict=None, diff_summaries=None, cities_weather_dict=None):
     """将高精网格(含今明双日朝霞+晚霞全套4张网格)自动强制覆盖上传至 Gitee 公开仓库，确保与小程序 100% 同步"""
     cfg = CLOUD_SYNC_CONFIG.get("gitee", {})
     if not cfg.get("enabled") or not cfg.get("owner") or not cfg.get("repo") or not cfg.get("access_token"):
@@ -1528,6 +1575,7 @@ def upload_grid_to_gitee(compact_payload, date_str, ev_type, grids_dict=None, ci
         "payload": compact_payload,
         "grids": grids_dict or {f"{date_str}_{ev_type}": compact_payload},
         "cities_337": cities_337_dict or {},
+        "cities_weather": cities_weather_dict or {},
         "diff_summaries": diff_summaries or {},
         "feedback_replies": fb_replies_list
     }
@@ -2289,7 +2337,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
 
     if run_all_modes:
         print("=" * 78)
-        print(f"[LOHUI V11.0.95 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
+        print(f"[LOHUI V11.0.96 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
         print(f"  -> 数据源: ECMWF/GFS + CAMS气溶胶 + 风云四号(FY-4B)/CMA + 葵花-9号短波辐射")
         print(f"  -> 光路积分: 500km 连续20步射线积分 + DEM高原盆地遮挡修正 | 0.1分无损Uint16编码")
         print("=" * 78)
@@ -2307,6 +2355,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
         ]
         grids_dict = dict(prev_grids)
         cities_337_dict = dict(prev_cities_337)
+        cities_weather_dict = {}
         diff_summaries = dict(prev_diffs)
         saved_paths = {}
 
@@ -2347,6 +2396,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
 
             c337_cur = extract_337_cities_compact_ranking(p_grid, lats, lons)
             cities_337_dict[slot_key] = c337_cur
+            cities_weather_dict[slot_key] = extract_337_cities_weather_pack(p_grid, lats, lons)
             diff_summaries[slot_key] = compute_grid_hourly_diff_summary(p_grid, prev_grids.get(slot_key), land_mask, c337_cur, prev_cities_337.get(slot_key, ''))
             grids_dict[slot_key] = payload_str
 
@@ -2365,6 +2415,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
                 "payload": primary_payload,
                 "grids": grids_dict,
                 "cities_337": cities_337_dict,
+                "cities_weather": cities_weather_dict,
                 "diff_summaries": diff_summaries
             }, f, ensure_ascii=False, indent=2)
         print(f"[成功] 云端同步缓存(含0.1分无损网格 + 全国337城权威榜单 + 上期变化对比)已收纳至隐藏目录: {out_json_path}")
@@ -2374,7 +2425,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
                 progress_cb(93, "正在将最新超清网格与337城权威榜单覆盖同步至小程序 Gitee 云端...")
             except Exception:
                 pass
-        upload_grid_to_gitee(primary_payload, target_date_str, "sunset", grids_dict=grids_dict, cities_337_dict=cities_337_dict, diff_summaries=diff_summaries)
+        upload_grid_to_gitee(primary_payload, target_date_str, "sunset", grids_dict=grids_dict, cities_337_dict=cities_337_dict, diff_summaries=diff_summaries, cities_weather_dict=cities_weather_dict)
         record_auto_sync_success(work_dir, f"全量超清制图与云端覆盖 ({rows}x{cols})")
         if progress_cb:
             try:
