@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 r"""
 ===============================================================================
-LOHUI V11.0.97 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
+LOHUI V11.1.00 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
 
 核心特性 (对标莉景天气 / Sunsetbot C1 专业版 4:3 无拉伸火烧云地图规范):
 1. 严格锁定 1/cos(35°) 真实地理纵横比 (4:3 标准横幅 2640x1980)，彻底消除中国版图纵向拉伸变形;
@@ -809,7 +809,7 @@ def js_round(val):
 
 
 def compute_physical_score_point_py(high_cloud, mid_cloud, low_mid_cloud, vis_km, rh, ray_trans, aod, win_rh=None, dd_val=None, win_dd=None, pp=0.0, wmo_code=0, win_fog_code=0, blh_m=600.0, pm25_val=22.0, pm10_val=35.0):
-    """单点核心物理算分函数 (V11.0.97 与小程序端 scoringCore.js computePhysicalScore 100% 逐字数学同构，全网格分差 0.0)"""
+    """单点核心物理算分函数 (V11.1.00 与小程序端 scoringCore.js computePhysicalScore 100% 逐字数学同构，全网格分差 0.0)"""
     high_cloud = float(high_cloud)
     mid_cloud = float(mid_cloud)
     low_mid_cloud = float(low_mid_cloud)
@@ -832,7 +832,7 @@ def compute_physical_score_point_py(high_cloud, mid_cloud, low_mid_cloud, vis_km
         * clamp01((ray_trans - 70.0) / 4.0)
         * clamp01((vis_km - 10.8) / 1.2))
     double_deck_w = double_deck_upper * clamp01((9.0 - low_mid_cloud) / 4.0)
-    coastal_multilayer_w = (clamp01((vis_km - 19.5) / 4.5)
+    coastal_multilayer_w = (clamp01((vis_km - 16.5) / 5.0)
         * clamp01((high_cloud - 38.0) / 8.0)
         * clamp01((high_cloud * 0.68 - mid_cloud) / 8.0)
         * clamp01((36.0 - low_mid_cloud) / 8.0)
@@ -860,7 +860,7 @@ def compute_physical_score_point_py(high_cloud, mid_cloud, low_mid_cloud, vis_km
         canvas_raw = canvas_raw * (low_occ_damp + (1.0 - low_occ_damp) * coastal_multilayer_w)
 
     if double_deck_w < 0.99 and vis_km < 31.5 and mid_cloud >= 18.0:
-        mid_ratio_gate = max(clamp01((38.0 - high_cloud) / 10.0), clamp01((mid_cloud - high_cloud * 0.58) / 10.0), clamp01((22.5 - vis_km) / 3.5))
+        mid_ratio_gate = max(clamp01((38.0 - high_cloud) / 10.0), clamp01((mid_cloud - high_cloud * 0.58) / 10.0), clamp01((22.5 - vis_km) / 3.5) * clamp01((mid_cloud - high_cloud * 0.46) / 10.0))
         mid_dom_w = clamp01((mid_cloud - 16.0) / 14.0) * clamp01((74.0 - high_cloud) / 12.0) * mid_ratio_gate * (1.0 - double_deck_w) * (1.0 - coastal_multilayer_w)
         self_shadow = max(0.38, 1.0 - (mid_cloud - 25.0) * 0.012) if mid_cloud > 25.0 else 1.0
         high_assist = min(6.5, high_visible * 0.16)
@@ -1035,9 +1035,11 @@ def compute_physical_score_point_py(high_cloud, mid_cloud, low_mid_cloud, vis_km
     if pm10_val >= 120.0:
         effective_vis_km = min(effective_vis_km, max(1.2, 1800.0 / pm10_val))
 
-    if wmo_code >= 51:
-        rain_vis_cap = 3.2 if (wmo_code >= 63 or wmo_code == 65 or wmo_code >= 81) else (5.5 if (wmo_code >= 61 or wmo_code >= 71) else 7.5)
-        effective_vis_km = min(effective_vis_km, rain_vis_cap)
+    rain_curtain_w = clamp01((low_mid_cloud - 18.0) / 30.0) * (0.55 + 0.45 * clamp01((72.0 - ray_trans) / 28.0))
+    if wmo_code >= 51 and rain_curtain_w > 0.01:
+        raw_rain_vis_cap = 3.2 if (wmo_code >= 63 or wmo_code == 65 or wmo_code >= 81) else (5.5 if (wmo_code >= 61 or wmo_code >= 71) else 7.5)
+        eff_rain_vis_cap = 24.0 * (1.0 - rain_curtain_w) + raw_rain_vis_cap * rain_curtain_w
+        effective_vis_km = min(effective_vis_km, eff_rain_vis_cap)
 
     effective_aod = aod
     if effective_vis_km < 10.0:
@@ -1111,7 +1113,8 @@ def compute_physical_score_point_py(high_cloud, mid_cloud, low_mid_cloud, vis_km
             wmo_factor = 0.42
         else:
             wmo_factor = 0.58
-        f_precip = min(f_precip, wmo_factor)
+        eff_wmo_factor = 1.0 - (1.0 - wmo_factor) * rain_curtain_w
+        f_precip = min(f_precip, eff_wmo_factor)
     if f_precip < 1.0:
         score_val = js_round(score_val * f_precip)
 
@@ -1311,7 +1314,7 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                 # 青藏高原/川西高原/云贵高原高海拔洁净大气增益
                 ray_trans = min(99.0, ray_trans * 1.05)
 
-            # V11.0.97 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
+            # V11.1.00 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
             clamp01 = lambda v: max(0.0, min(1.0, float(v)))
             double_deck_upper = (clamp01((high_cloud - 58.0) / 8.0)
                 * clamp01((88.0 - high_cloud) / 10.0)
@@ -2337,7 +2340,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
 
     if run_all_modes:
         print("=" * 78)
-        print(f"[LOHUI V11.0.97 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
+        print(f"[LOHUI V11.1.00 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
         print(f"  -> 数据源: ECMWF/GFS + CAMS气溶胶 + 风云四号(FY-4B)/CMA + 葵花-9号短波辐射")
         print(f"  -> 光路积分: 500km 连续20步射线积分 + DEM高原盆地遮挡修正 | 0.1分无损Uint16编码")
         print("=" * 78)
