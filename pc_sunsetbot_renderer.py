@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 r"""
 ===============================================================================
-LOHUI V11.1.01 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
+LOHUI V11.1.02 · PC 端高精二维网格三维光路追踪火烧云制图与云端全员分发引擎
 
 核心特性 (对标莉景天气 / Sunsetbot C1 专业版 4:3 无拉伸火烧云地图规范):
 1. 严格锁定 1/cos(35°) 真实地理纵横比 (4:3 标准横幅 2640x1980)，彻底消除中国版图纵向拉伸变形;
@@ -809,7 +809,7 @@ def js_round(val):
 
 
 def compute_physical_score_point_py(high_cloud, mid_cloud, low_mid_cloud, vis_km, rh, ray_trans, aod, win_rh=None, dd_val=None, win_dd=None, pp=0.0, wmo_code=0, win_fog_code=0, blh_m=600.0, pm25_val=22.0, pm10_val=35.0):
-    """单点核心物理算分函数 (V11.1.01 与小程序端 scoringCore.js computePhysicalScore 100% 逐字数学同构，全网格分差 0.0)"""
+    """单点核心物理算分函数 (V11.1.02 与小程序端 scoringCore.js computePhysicalScore 100% 逐字数学同构，全网格分差 0.0)"""
     high_cloud = float(high_cloud)
     mid_cloud = float(mid_cloud)
     low_mid_cloud = float(low_mid_cloud)
@@ -1277,10 +1277,13 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
             pm10_val = float(pm10_grid[r, c])
 
             # --- 沿太阳方位角计算进光走廊透光率 ray_trans (0~100%) 与西天远端云幕接力 ---
+            # V11.1.02 Beer-Lambert 串行光闸与远端云墙截光耦合 (解决 2026-11-19 株洲近程晴空稀释 200~450km 湘西/黔东厚云墙问题)
             corridor_trans_acc = 0.0
             west_high_max = 0.0
             west_mid_max = 0.0
             west_low_first = low_mid_cloud
+            near_mid_min_trans = 1.0
+            far_wall_step_trans = []
             for idx_d, (d_km, w_d) in enumerate(zip(ray_dists_km, ray_weights)):
                 d_lat = (d_km * u_north) / 111.32
                 d_lon = (d_km * u_east) / (111.32 * cos_lat)
@@ -1296,16 +1299,32 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                     if d_km <= 175.0:
                         west_high_max = max(west_high_max, rem_hc * decay)
                         west_mid_max = max(west_mid_max, rem_mc * decay)
-                    # 考虑球面曲率抬升 h_ray(d) = d^2 / (2 * R_eff): 远端 >300km 处贴地低云不再遮挡高空斜射光束，仅中高云厚墙形成远端封堵
-                    low_curv_weight = max(0.15, 0.95 * math.exp(-max(0.0, d_km - 120.0) / 180.0))
-                    mid_curv_weight = max(0.35, 0.65 * math.exp(-max(0.0, d_km - 220.0) / 260.0))
-                    rem_block = min(100.0, rem_lc * low_curv_weight + rem_mc * mid_curv_weight + max(0.0, rem_hc - 78.0) * 0.55)
-                    step_trans = max(0.06, 1.0 - (rem_block / 100.0) ** 1.25)
+                    # 考虑球面曲率抬升 h_ray(d) = d^2 / (2 * R_eff): 180~450km 远端中云墙与厚高云墙仍拦截低仰角红光
+                    low_curv_weight = max(0.18, 0.95 * math.exp(-max(0.0, d_km - 120.0) / 180.0))
+                    mid_curv_weight = max(0.45, 0.72 * math.exp(-max(0.0, d_km - 240.0) / 280.0))
+                    rem_block = min(100.0, rem_lc * low_curv_weight + rem_mc * mid_curv_weight + max(0.0, rem_hc - 72.0) * 0.65)
+                    step_trans = max(0.06, 1.0 - (rem_block / 100.0) ** 1.22)
                     corridor_trans_acc += w_d * step_trans
+                    if d_km <= 220.0:
+                        near_mid_min_trans = min(near_mid_min_trans, step_trans)
+                    if 160.0 <= d_km <= 440.0:
+                        far_wall_step_trans.append(step_trans)
                 else:
                     corridor_trans_acc += w_d * 0.75
 
-            ray_trans = max(5.0, min(99.0, corridor_trans_acc * 100.0))
+            # 连续两步滑动均值提取真实大尺度远端云墙瓶颈 (抗单点网格噪点，精准识别 >=60km 宽度的系统性截光云墙)
+            far_wall_bottleneck = 1.0
+            if len(far_wall_step_trans) >= 2:
+                for k_fw in range(len(far_wall_step_trans) - 1):
+                    pair_avg = 0.5 * (far_wall_step_trans[k_fw] + far_wall_step_trans[k_fw + 1])
+                    if pair_avg < far_wall_bottleneck:
+                        far_wall_bottleneck = pair_avg
+            elif len(far_wall_step_trans) == 1:
+                far_wall_bottleneck = far_wall_step_trans[0]
+
+            serial_ceiling = min(near_mid_min_trans * 1.12 + 0.06, far_wall_bottleneck * 1.22 + 0.10)
+            effective_corridor_trans = min(corridor_trans_acc, 0.35 * corridor_trans_acc + 0.65 * serial_ceiling)
+            ray_trans = max(5.0, min(99.0, effective_corridor_trans * 100.0))
             # 内置 DEM 高原/盆地边缘东西向地形遮挡角与高海拔大气通透修正 (无需外部请求)
             if 28.0 <= lat <= 32.8 and 102.5 <= float(lons[c]) <= 104.8 and not is_sunrise:
                 # 四川盆地西缘 (成都-雅安-乐山一线) 西望横断山脉/贡嘎山脊低仰角遮挡修正
@@ -1314,7 +1333,7 @@ def compute_2d_gridded_raytracing_vividness(records, lats, lons, land_mask, is_s
                 # 青藏高原/川西高原/云贵高原高海拔洁净大气增益
                 ray_trans = min(99.0, ray_trans * 1.05)
 
-            # V11.1.01 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
+            # V11.1.02 盆地/平原 800hPa 蔽光灰云盖耦合门禁与西天近程受光云幕接力 (与小程序端 scoringCore.js 100% 同构)
             clamp01 = lambda v: max(0.0, min(1.0, float(v)))
             double_deck_upper = (clamp01((high_cloud - 58.0) / 8.0)
                 * clamp01((88.0 - high_cloud) / 10.0)
@@ -2340,7 +2359,7 @@ def render_sunsetbot_map(target_date_str, is_sunrise=False, output_png=None, run
 
     if run_all_modes:
         print("=" * 78)
-        print(f"[LOHUI V11.1.01 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
+        print(f"[LOHUI V11.1.02 四源超清光路引擎] 正在拉取全国 {len(all_nodes)} 个控制点 4 路卫星与实测数据")
         print(f"  -> 数据源: ECMWF/GFS + CAMS气溶胶 + 风云四号(FY-4B)/CMA + 葵花-9号短波辐射")
         print(f"  -> 光路积分: 500km 连续20步射线积分 + DEM高原盆地遮挡修正 | 0.1分无损Uint16编码")
         print("=" * 78)
